@@ -17,9 +17,11 @@
         <div text-center padding>
             <img src="assets/img/login_logo.png" class="avatar-full login-logo" role="presentation">
         </div>
-        <form ion-list [formGroup]="siteForm" (ngSubmit)="connect($event, siteForm.value.siteUrl)" *ngIf="!fixedSites || fixedDisplay == 'select'">
+
+        <!-- CÓDIGO PADRÃO COMENTADO PARA PERSONALIZAÇÃO EAD UFGD -->
+        <!-- form ion-list [formGroup]="siteForm" (ngSubmit)="connect($event, siteForm.value.siteUrl)" *ngIf="!fixedSites || fixedDisplay == 'select'" -->
             <!-- Form to input the site URL if there are no fixed sites. -->
-            <ng-container *ngIf="!fixedSites">
+            <!-- ng-container *ngIf="!fixedSites">
                 <p padding>{{ 'core.login.newsitedescription' | translate }}</p>
                 <ion-item>
                     <ion-input type="url" name="url" placeholder="{{ 'core.login.siteaddress' | translate }}" formControlName="siteUrl" [core-auto-focus]="showKeyboard"></ion-input>
@@ -34,21 +36,29 @@
             </ion-item>
 
             <button ion-button block [disabled]="!siteForm.valid">{{ 'core.login.connect' | translate }}</button>
-        </form>
+        </form -->
+
+        <p padding>Escolha o servidor ao qual deseja se conectar:</p>
+
+        <a ion-button block (click)="connect($event, 'librasead.ufgd.edu.br')" [title]="LibEAD" margin-bottom>Libras EAD</a>
+        <a ion-button block (click)="connect($event, 'uabead.ufgd.edu.br')" [title]="UabEAD" margin-bottom>UAB EAD</a>
+
+        <!-- CÓDIGO PADRÃO COMENTADO PARA PERSONALIZAÇÃO EAD UFGD -->
         <!-- Pick the site from a list of fixed sites. -->
-        <ion-list *ngIf="fixedSites && (fixedDisplay == 'list' || fixedDisplay == 'listnourl')">
+        <!-- ion-list *ngIf="fixedSites && (fixedDisplay == 'list' || fixedDisplay == 'listnourl')">
             <ion-item no-lines><h2 class="item-heading">{{ 'core.login.selectsite' | translate }}</h2></ion-item>
             <ion-searchbar *ngIf="fixedSites.length > 4" [(ngModel)]="filter" (ionInput)="filterChanged($event)" (ionCancel)="filterChanged()" [placeholder]="'core.login.findyoursite' | translate"></ion-searchbar>
             <ion-item *ngFor="let site of filteredSites" (click)="connect($event, site.url)" [title]="site.name" detail-push text-wrap>
                 <h2>{{site.name}}</h2>
                 <p *ngIf="fixedDisplay == 'list'">{{site.url}}</p>
             </ion-item>
-        </ion-list>
+        </ion-list -->
 
         <!-- Display them using buttons. -->
-        <div *ngIf="fixedSites && fixedDisplay == 'buttons'">
+        <!-- div *ngIf="fixedSites && fixedDisplay == 'buttons'">
             <p class="padding no-padding-bottom">{{ 'core.login.selectsite' | translate }}</p>
             <a *ngFor="let site of fixedSites" ion-button block (click)="connect($event, site.url)" [title]="site.name" margin-bottom>{{site.name}}</a>
-        </div>
+        </div -->
+
     </div>
 </ion-content>
