@@ -18,10 +18,15 @@
             <img src="assets/img/login_logo.png" class="avatar-full login-logo" role="presentation">
         </div>
 
+        <p padding>Escolha o servidor ao qual deseja se conectar:</p>
+
+        <a ion-button block (click)="connect($event, 'librasead.ufgd.edu.br')" [title]="LibEAD" margin-bottom>Libras EAD</a>
+        <a ion-button block (click)="connect($event, 'uabead.ufgd.edu.br')" [title]="UabEAD" margin-bottom>UAB EAD</a>
+
         <!-- CÓDIGO PADRÃO COMENTADO PARA PERSONALIZAÇÃO EAD UFGD -->
-        <!-- form ion-list [formGroup]="siteForm" (ngSubmit)="connect($event, siteForm.value.siteUrl)" *ngIf="!fixedSites || fixedDisplay == 'select'" -->
+        <form ion-list [formGroup]="siteForm" (ngSubmit)="connect($event, siteForm.value.siteUrl)" *ngIf="!fixedSites || fixedDisplay == 'select'">
             <!-- Form to input the site URL if there are no fixed sites. -->
-            <!-- ng-container *ngIf="!fixedSites">
+            <ng-container *ngIf="!fixedSites">
                 <p padding>{{ 'core.login.newsitedescription' | translate }}</p>
                 <ion-item>
                     <ion-input type="url" name="url" placeholder="{{ 'core.login.siteaddress' | translate }}" formControlName="siteUrl" [core-auto-focus]="showKeyboard"></ion-input>
@@ -36,12 +41,7 @@
             </ion-item>
 
             <button ion-button block [disabled]="!siteForm.valid">{{ 'core.login.connect' | translate }}</button>
-        </form -->
-
-        <p padding>Escolha o servidor ao qual deseja se conectar:</p>
-
-        <a ion-button block (click)="connect($event, 'librasead.ufgd.edu.br')" [title]="LibEAD" margin-bottom>Libras EAD</a>
-        <a ion-button block (click)="connect($event, 'uabead.ufgd.edu.br')" [title]="UabEAD" margin-bottom>UAB EAD</a>
+        </form>
 
         <!-- CÓDIGO PADRÃO COMENTADO PARA PERSONALIZAÇÃO EAD UFGD -->
         <!-- Pick the site from a list of fixed sites. -->
