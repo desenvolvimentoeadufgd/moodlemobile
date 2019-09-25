@@ -2,7 +2,7 @@
 <widget id="br.edu.ufgd.moodlemobileead" version="3.6.1" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
     <name>EAD UFGD</name>
     <description>Personalização da aplicação Moodle Mobile para a EAD UFGD</description>
-    <author email="ti.ead@ufgd.edu.br" href="https://portalead.ufgd.edu.br">TI EAD UFGD</author>
+    <author email="ti.ead@ufgd.edu.br" href="https://portal.ead.ufgd.edu.br">TI EAD UFGD</author>
     <content src="index.html" />
     <access origin="*" />
     <access launch-external="yes" origin="tel:*" />
