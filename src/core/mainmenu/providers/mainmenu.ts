@@ -13,9 +13,12 @@
 // limitations under the License.
 
 import { Injectable } from '@angular/core';
+import { NavController } from 'ionic-angular';
 import { CoreLangProvider } from '@providers/lang';
 import { CoreSitesProvider } from '@providers/sites';
+import { CoreUtilsProvider } from '@providers/utils/utils';
 import { CoreConfigConstants } from '../../../configconstants';
+import { CoreMainMenuDelegate, CoreMainMenuHandlerToDisplay } from './delegate';
 
 /**
  * Custom main menu item.
@@ -52,8 +55,36 @@ export interface CoreMainMenuCustomItem {
 @Injectable()
 export class CoreMainMenuProvider {
     static NUM_MAIN_HANDLERS = 4;
+    static ITEM_MIN_WIDTH = 72; // Min with of every item, based on 5 items on a 360 pixel wide screen.
+    protected tablet = false;
 
-    constructor(private langProvider: CoreLangProvider, private sitesProvider: CoreSitesProvider) { }
+    constructor(private langProvider: CoreLangProvider, private sitesProvider: CoreSitesProvider,
+            protected menuDelegate: CoreMainMenuDelegate, protected utils: CoreUtilsProvider) {
+        this.tablet = window && window.innerWidth && window.innerWidth >= 576 && window.innerHeight >= 576;
+    }
+
+    /**
+     * Get the current main menu handlers.
+     *
+     * @return {Promise<CoreMainMenuHandlerToDisplay[]>} Promise resolved with the current main menu handlers.
+     */
+    getCurrentMainMenuHandlers(): Promise<CoreMainMenuHandlerToDisplay[]> {
+        const deferred = this.utils.promiseDefer();
+
+        const subscription = this.menuDelegate.getHandlers().subscribe((handlers) => {
+            subscription && subscription.unsubscribe();
+
+            // Remove the handlers that should only appear in the More menu.
+            handlers = handlers.filter((handler) => {
+                return !handler.onlyInMore;
+            });
+
+            // Return main handlers.
+            deferred.resolve(handlers.slice(0, this.getNumItems()));
+        });
+
+        return deferred.promise;
+    }
 
     /**
      * Get a list of custom menu items for a certain site.
@@ -157,5 +188,80 @@ export class CoreMainMenuProvider {
                 });
             });
         });
+    }
+
+    /**
+     * Get the number of items to be shown on the main menu bar.
+     *
+     * @return {number} Number of items depending on the device width.
+     */
+    getNumItems(): number {
+        if (!this.isResponsiveMainMenuItemsDisabledInCurrentSite() && window && window.innerWidth) {
+            let numElements;
+
+            if (this.tablet) {
+                // Tablet, menu will be displayed vertically.
+                numElements = Math.floor(window.innerHeight / CoreMainMenuProvider.ITEM_MIN_WIDTH);
+            } else {
+                numElements = Math.floor(window.innerWidth / CoreMainMenuProvider.ITEM_MIN_WIDTH);
+
+                // Set a maximum elements to show and skip more button.
+                numElements = numElements >= 5 ? 5 : numElements;
+            }
+
+            // Set a mínimum elements to show and skip more button.
+            return numElements > 1 ? numElements - 1 : 1;
+        }
+
+        return CoreMainMenuProvider.NUM_MAIN_HANDLERS;
+    }
+
+    /**
+     * Get tabs placement depending on the device size.
+     *
+     * @param  {NavController} navCtrl  NavController to resize the content.
+     * @return {string}                Tabs placement including side value.
+     */
+    getTabPlacement(navCtrl: NavController): string {
+        const tablet = window && window.innerWidth && window.innerWidth >= 576 && window.innerHeight >= 576;
+
+        if (tablet != this.tablet) {
+            this.tablet = tablet;
+
+            // Resize so content margins can be updated.
+            setTimeout(() => {
+                navCtrl.resize();
+            }, 500);
+        }
+
+        return tablet ? 'side' : 'bottom';
+    }
+
+    /**
+     * Check if a certain page is the root of a main menu handler currently displayed.
+     *
+     * @param {string} page Name of the page.
+     * @param {string} [pageParams] Page params.
+     * @return {Promise<boolean>} Promise resolved with boolean: whether it's the root of a main menu handler.
+     */
+    isCurrentMainMenuHandler(pageName: string, pageParams?: any): Promise<boolean> {
+        return this.getCurrentMainMenuHandlers().then((handlers) => {
+            const handler = handlers.find((handler, i) => {
+                return handler.page == pageName;
+            });
+
+            return !!handler;
+        });
+    }
+
+    /**
+     * Check if responsive main menu items is disabled in the current site.
+     *
+     * @return {boolean} Whether it's disabled.
+     */
+    protected isResponsiveMainMenuItemsDisabledInCurrentSite(): boolean {
+        const site = this.sitesProvider.getCurrentSite();
+
+        return site && site.isFeatureDisabled('NoDelegate_ResponsiveMainMenuItems');
     }
 }

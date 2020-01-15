@@ -1,6 +1,6 @@
 <ion-header>
     <ion-navbar core-back-button>
-        <ion-title><core-format-text [text]="siteInfo.sitename"></core-format-text></ion-title>
+        <ion-title><core-format-text [text]="siteName"></core-format-text></ion-title>
     </ion-navbar>
 </ion-header>
 <ion-content>
@@ -13,7 +13,7 @@
         <ion-item text-center *ngIf="(!handlers || !handlers.length) && !handlersLoaded">
             <ion-spinner></ion-spinner>
         </ion-item>
-        <a ion-item *ngFor="let handler of handlers" [ngClass]="['core-moremenu-handler', handler.class]" (click)="openHandler(handler)" title="{{ handler.title | translate }}" detail-push>
+        <a ion-item *ngFor="let handler of handlers" [ngClass]="['core-moremenu-handler', handler.class || '']" (click)="openHandler(handler)" title="{{ handler.title | translate }}" detail-push>
             <core-icon [name]="handler.icon" item-start></core-icon>
             <p>{{ handler.title | translate}}</p>
             <ion-badge item-end *ngIf="handler.showBadge" [hidden]="handler.loading || !handler.badge">{{handler.badge}}</ion-badge>

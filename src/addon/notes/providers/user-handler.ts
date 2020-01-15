@@ -72,7 +72,7 @@ export class AddonNotesUserHandler implements CoreUserProfileHandler {
     isEnabledForUser(user: any, courseId: number, navOptions?: any, admOptions?: any): boolean | Promise<boolean> {
         // Active course required.
         if (!courseId || user.id == this.sitesProvider.getCurrentSiteUserId()) {
-            return Promise.resolve(false);
+            return false;
         }
 
         if (typeof this.noteEnabledCache[courseId] != 'undefined') {
@@ -99,7 +99,7 @@ export class AddonNotesUserHandler implements CoreUserProfileHandler {
             action: (event, navCtrl, user, courseId): void => {
                 event.preventDefault();
                 event.stopPropagation();
-                // Always use redirect to make it the new history root (to avoid "loops" in history).
+
                 this.linkHelper.goInSite(navCtrl, 'AddonNotesListPage', { userId: user.id, courseId: courseId });
             }
         };

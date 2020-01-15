@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Component, OnInit, Input, OnDestroy, ViewChild, Injector } from '@angular/core';
+import { Component, OnInit, Input, OnDestroy, ViewChild, Injector, OnChanges, SimpleChange } from '@angular/core';
 import { Searchbar } from 'ionic-angular';
 import { CoreEventsProvider } from '@providers/events';
 import { CoreUtilsProvider } from '@providers/utils/utils';
@@ -32,7 +32,7 @@ import { CoreBlockBaseComponent } from '@core/block/classes/base-block-component
     selector: 'addon-block-myoverview',
     templateUrl: 'addon-block-myoverview.html'
 })
-export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implements OnInit, OnDestroy {
+export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implements OnInit, OnChanges, OnDestroy {
     @ViewChild('searchbar') searchbar: Searchbar;
     @Input() downloadEnabled: boolean;
 
@@ -62,11 +62,18 @@ export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implem
     showHidden = false;
     showSelectorFilter = false;
     showSortFilter = false;
+    downloadCourseEnabled: boolean;
+    downloadCoursesEnabled: boolean;
+    disableInProgress = false;
+    disablePast = false;
+    disableFuture = false;
+    disableFavourite = false;
+    disableHidden = false;
 
     protected prefetchIconsInitialized = false;
     protected isDestroyed;
-    protected downloadButtonObserver;
     protected coursesObserver;
+    protected updateSiteObserver;
     protected courseIds = [];
     protected fetchContentDefaultError = 'Error getting my overview data.';
 
@@ -84,17 +91,15 @@ export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implem
      */
     ngOnInit(): void {
         // Refresh the enabled flags if enabled.
-        this.downloadButtonObserver = this.eventsProvider.on(CoreCoursesProvider.EVENT_DASHBOARD_DOWNLOAD_ENABLED_CHANGED,
-                (data) => {
-            const wasEnabled = this.downloadEnabled;
+        this.downloadCourseEnabled = !this.coursesProvider.isDownloadCourseDisabledInSite();
+        this.downloadCoursesEnabled = !this.coursesProvider.isDownloadCoursesDisabledInSite();
 
-            this.downloadEnabled = data.enabled;
+        // Refresh the enabled flags if site is updated.
+        this.updateSiteObserver = this.eventsProvider.on(CoreEventsProvider.SITE_UPDATED, () => {
+            this.downloadCourseEnabled = !this.coursesProvider.isDownloadCourseDisabledInSite();
+            this.downloadCoursesEnabled = !this.coursesProvider.isDownloadCoursesDisabledInSite();
 
-            if (!wasEnabled && this.downloadEnabled && this.loaded) {
-                // Download all courses is enabled now, initialize it.
-                this.initPrefetchCoursesIcons();
-            }
-        });
+        }, this.sitesProvider.getCurrentSiteId());
 
         this.coursesObserver = this.eventsProvider.on(CoreCoursesProvider.EVENT_MY_COURSES_UPDATED, () => {
             this.refreshContent();
@@ -113,6 +118,16 @@ export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implem
         Promise.all(promises).finally(() => {
             super.ngOnInit();
         });
+    }
+
+    /**
+     * Detect changes on input properties.
+     */
+    ngOnChanges(changes: {[name: string]: SimpleChange}): void {
+        if (changes.downloadEnabled && !changes.downloadEnabled.previousValue && this.downloadEnabled && this.loaded) {
+            // Download all courses is enabled now, initialize it.
+            this.initPrefetchCoursesIcons();
+        }
     }
 
     /**
@@ -160,12 +175,17 @@ export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implem
 
             this.courses.filter = '';
             this.showFilter = false;
+            this.disableInProgress = this.courses.inprogress.length === 0;
+            this.disablePast = this.courses.past.length === 0;
+            this.disableFuture = this.courses.future.length === 0;
             this.showSelectorFilter = courses.length > 0 && (this.courses.past.length > 0 || this.courses.future.length > 0 ||
-                typeof courses[0].enddate != 'undefined');
+                   typeof courses[0].enddate != 'undefined');
             this.showHidden = this.showSelectorFilter && typeof courses[0].hidden != 'undefined';
+            this.disableHidden = this.courses.hidden.length === 0;
             this.showFavourite = this.showSelectorFilter && typeof courses[0].isfavourite != 'undefined';
-            if (!this.showSelectorFilter) {
-                // No selector, show all.
+            this.disableFavourite = this.courses.favourite.length === 0;
+            if (!this.showSelectorFilter || (this.selectedFilter === 'inprogress' && this.disableInProgress)) {
+                // No selector, or the default option is disabled, show all.
                 this.selectedFilter = 'all';
             }
             this.filteredCourses = this.courses[this.selectedFilter];
@@ -336,6 +356,6 @@ export class AddonBlockMyOverviewComponent extends CoreBlockBaseComponent implem
     ngOnDestroy(): void {
         this.isDestroyed = true;
         this.coursesObserver && this.coursesObserver.off();
-        this.downloadButtonObserver && this.downloadButtonObserver.off();
+        this.updateSiteObserver && this.updateSiteObserver.off();
     }
 }

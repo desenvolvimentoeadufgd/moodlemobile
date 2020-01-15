@@ -36,13 +36,6 @@ ion-app.app-root .core-tabs-bar {
             @include margin(null, 5px, null, null);
         }
 
-        ion-badge.tab-badge {
-            position: relative;
-            @include position(auto, auto, auto, auto);
-            @include margin(null, null, null, 5px);
-
-        }
-
         &[aria-selected=true] {
             color: $core-top-tabs-color-active !important;
             border-bottom-color: $core-top-tabs-border-active !important;
@@ -81,7 +74,7 @@ ion-app.app-root.ios .core-tabs-bar .tab-slide {
     max-width: $tabs-ios-tab-max-width;
     min-height: $tabs-ios-tab-min-height;
 
-    font-size: $tabs-ios-tab-font-size + 4;
+    font-size: $tabs-ios-tab-font-size;
     font-weight: $tabs-ios-tab-font-weight;
     color: $tabs-ios-tab-text-color;
 }
@@ -109,7 +102,6 @@ ion-app.app-root core-tabs {
 
             .scroll-content {
                 overflow: hidden !important;
-                contain: initial;
                 position: relative;
             }
         }
@@ -118,8 +110,10 @@ ion-app.app-root core-tabs {
     &.tabs-hidden {
         .core-tabs-bar {
             display: none !important;
+            transform: translateY(0) !important;
         }
         .core-tabs-content-container {
+            transform: translateY(0) !important;
             padding-bottom: 0 !important;
         }
     }

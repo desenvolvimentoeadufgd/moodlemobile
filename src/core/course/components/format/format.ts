@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {
-    Component, Input, OnInit, OnChanges, OnDestroy, SimpleChange, Output, EventEmitter, ViewChildren, QueryList, Injector
+    Component, Input, OnInit, OnChanges, OnDestroy, SimpleChange, Output, EventEmitter, ViewChildren, QueryList, Injector, ViewChild
 } from '@angular/core';
 import { Content, ModalController } from 'ionic-angular';
 import { TranslateService } from '@ngx-translate/core';
@@ -24,6 +24,7 @@ import { CoreCourseProvider } from '@core/course/providers/course';
 import { CoreCourseHelperProvider } from '@core/course/providers/helper';
 import { CoreCourseFormatDelegate } from '@core/course/providers/format-delegate';
 import { CoreCourseModulePrefetchDelegate } from '@core/course/providers/module-prefetch-delegate';
+import { CoreBlockCourseBlocksComponent } from '@core/block/components/course-blocks/course-blocks';
 import { CoreDynamicComponent } from '@components/dynamic-component/dynamic-component';
 
 /**
@@ -52,6 +53,7 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
     @Output() completionChanged?: EventEmitter<any>; // Will emit an event when any module completion changes.
 
     @ViewChildren(CoreDynamicComponent) dynamicComponents: QueryList<CoreDynamicComponent>;
+    @ViewChild(CoreBlockCourseBlocksComponent) courseBlocksComponent: CoreBlockCourseBlocksComponent;
 
     // All the possible component classes.
     courseFormatComponent: any;
@@ -76,12 +78,14 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
     loaded: boolean;
 
     protected sectionStatusObserver;
+    protected selectTabObserver;
     protected lastCourseFormat: string;
 
     constructor(private cfDelegate: CoreCourseFormatDelegate, translate: TranslateService, private injector: Injector,
             private courseHelper: CoreCourseHelperProvider, private domUtils: CoreDomUtilsProvider,
             eventsProvider: CoreEventsProvider, private sitesProvider: CoreSitesProvider, private content: Content,
-            prefetchDelegate: CoreCourseModulePrefetchDelegate, private modalCtrl: ModalController) {
+            prefetchDelegate: CoreCourseModulePrefetchDelegate, private modalCtrl: ModalController,
+            private courseProvider: CoreCourseProvider) {
 
         this.selectOptions.title = translate.instant('core.course.sections');
         this.completionChanged = new EventEmitter();
@@ -119,11 +123,33 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
                 this.courseHelper.calculateSectionStatus(section, this.course.id, false).then(() => {
                     if (section.isDownloading && !prefetchDelegate.isBeingDownloaded(downloadId)) {
                         // All the modules are now downloading, set a download all promise.
-                        this.prefetch(section, false);
+                        this.prefetch(section);
                     }
                 });
             }
         }, this.sitesProvider.getCurrentSiteId());
+
+        // Listen for select course tab events to select the right section if needed.
+        this.selectTabObserver = eventsProvider.on(CoreEventsProvider.SELECT_COURSE_TAB, (data) => {
+
+            if (!data.name) {
+                let section;
+
+                if (typeof data.sectionId != 'undefined' && data.sectionId != null && this.sections) {
+                    section = this.sections.find((section) => {
+                        return section.id == data.sectionId;
+                    });
+                } else if (typeof data.sectionNumber != 'undefined' && data.sectionNumber != null && this.sections) {
+                    section = this.sections.find((section) => {
+                        return section.section == data.sectionNumber;
+                    });
+                }
+
+                if (section) {
+                    this.sectionChanged(section);
+                }
+            }
+        });
     }
 
     /**
@@ -303,6 +329,7 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
             this.canLoadMore = false;
             this.showSectionId = 0;
             this.showMoreActivities();
+            this.courseHelper.calculateSectionsStatus(this.sections, this.course.id, false, false);
         }
 
         if (this.moduleId && typeof previousValue == 'undefined') {
@@ -311,6 +338,13 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
             }, 200);
         } else {
             this.domUtils.scrollToTop(this.content, 0);
+        }
+
+        if (!previousValue || previousValue.id != newSection.id) {
+            // First load or section changed, add log in Moodle.
+            this.courseProvider.logView(this.course.id, newSection.section, undefined, this.course.fullname).catch(() => {
+                // Ignore errors.
+            });
         }
     }
 
@@ -339,13 +373,10 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
     /**
      * Confirm and prefetch a section. If the section is "all sections", prefetch all the sections.
      *
-     * @param {Event} e Click event.
      * @param {any} section Section to download.
+     * @param {boolean} refresh Refresh clicked (not used).
      */
-    prefetch(e: Event, section: any): void {
-        e.preventDefault();
-        e.stopPropagation();
-
+    prefetch(section: any, refresh: boolean = false): void {
         section.isCalculating = true;
         this.courseHelper.confirmDownloadSizeSection(this.course.id, section, this.sections).then(() => {
             this.prefetchSection(section, true);
@@ -391,6 +422,10 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
         this.dynamicComponents.forEach((component) => {
             promises.push(Promise.resolve(component.callComponentFunction('doRefresh', [refresher, done, afterCompletionChange])));
         });
+
+        promises.push(this.courseBlocksComponent.invalidateBlocks().finally(() => {
+            return this.courseBlocksComponent.loadContent();
+        }));
 
         return Promise.all(promises);
     }
@@ -440,9 +475,8 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
      * Component destroyed.
      */
     ngOnDestroy(): void {
-        if (this.sectionStatusObserver) {
-            this.sectionStatusObserver.off();
-        }
+        this.sectionStatusObserver && this.sectionStatusObserver.off();
+        this.selectTabObserver && this.selectTabObserver.off();
     }
 
     /**
@@ -452,6 +486,14 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
         this.dynamicComponents.forEach((component) => {
             component.callComponentFunction('ionViewDidEnter');
         });
+        if (this.downloadEnabled) {
+            // The download status of a section might have been changed from within a module page.
+            if (this.selectedSection && this.selectedSection.id !== CoreCourseProvider.ALL_SECTIONS_ID) {
+                this.courseHelper.calculateSectionStatus(this.selectedSection, this.course.id, false, false);
+            } else {
+                this.courseHelper.calculateSectionsStatus(this.sections, this.course.id, false, false);
+            }
+        }
     }
 
     /**
@@ -496,5 +538,14 @@ export class CoreCourseFormatComponent implements OnInit, OnChanges, OnDestroy {
         }
         // Emit a new event for other components.
         this.completionChanged.emit(completionData);
+    }
+
+    /**
+     * Recalculate the download status of each section, in response to a module being downloaded.
+     *
+     * @param {any} eventData
+     */
+    onModuleStatusChange(eventData: any): void {
+        this.courseHelper.calculateSectionsStatus(this.sections, this.course.id, false, false);
     }
 }

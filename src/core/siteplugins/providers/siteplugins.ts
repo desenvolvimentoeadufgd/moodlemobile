@@ -21,7 +21,7 @@ import { CoreLoggerProvider } from '@providers/logger';
 import { CoreSite, CoreSiteWSPreSets } from '@classes/site';
 import { CoreSitesProvider } from '@providers/sites';
 import { CoreTextUtilsProvider } from '@providers/utils/text';
-import { CoreUtilsProvider } from '@providers/utils/utils';
+import { CoreUtilsProvider, PromiseDefer } from '@providers/utils/utils';
 import { CoreConfigConstants } from '../../../configconstants';
 import { CoreCoursesProvider } from '@core/courses/providers/courses';
 import { CoreEventsProvider } from '@providers/events';
@@ -67,6 +67,7 @@ export class CoreSitePluginsProvider {
     protected logger;
     protected sitePlugins: {[name: string]: CoreSitePluginsHandler} = {}; // Site plugins registered.
     protected sitePluginPromises: {[name: string]: Promise<any>} = {}; // Promises of loading plugins.
+    protected fetchPluginsDeferred: PromiseDefer;
     hasSitePluginsLoaded = false;
     sitePluginsFinishedLoading = false;
 
@@ -75,9 +76,16 @@ export class CoreSitePluginsProvider {
             private filepoolProvider: CoreFilepoolProvider, private coursesProvider: CoreCoursesProvider,
             private textUtils: CoreTextUtilsProvider, private eventsProvider: CoreEventsProvider) {
         this.logger = logger.getInstance('CoreUserProvider');
+
         const observer = this.eventsProvider.on(CoreEventsProvider.SITE_PLUGINS_LOADED, () => {
             this.sitePluginsFinishedLoading = true;
             observer && observer.off();
+        });
+
+        // Initialize deferred at start and on logout.
+        this.fetchPluginsDeferred = this.utils.promiseDefer();
+        eventsProvider.on(CoreEventsProvider.LOGOUT, () => {
+            this.fetchPluginsDeferred = this.utils.promiseDefer();
         });
     }
 
@@ -226,6 +234,8 @@ export class CoreSitePluginsProvider {
 
                 preSets = preSets || {};
                 preSets.cacheKey = this.getContentCacheKey(component, method, args);
+                preSets.updateFrequency = typeof preSets.updateFrequency != 'undefined' ? preSets.updateFrequency :
+                        CoreSite.FREQUENCY_OFTEN;
 
                 return this.sitesProvider.getCurrentSite().read('tool_mobile_get_content', data, preSets);
             }).then((result) => {
@@ -411,15 +421,15 @@ export class CoreSitePluginsProvider {
     /**
      * Load other data into args as determined by useOtherData list.
      * If useOtherData is undefined, it won't add any data.
-     * If useOtherData is defined but empty (null, false or empty string) it will copy all the data from otherData to args.
      * If useOtherData is an array, it will only copy the properties whose names are in the array.
+     * If useOtherData is any other value, it will copy all the data from otherData to args.
      *
      * @param {any} args The current args.
      * @param {any} otherData All the other data.
-     * @param {any[]} useOtherData Names of the attributes to include.
+     * @param {any} useOtherData Names of the attributes to include.
      * @return {any} New args.
      */
-    loadOtherDataInArgs(args: any, otherData: any, useOtherData: any[]): any {
+    loadOtherDataInArgs(args: any, otherData: any, useOtherData: any): any {
         if (!args) {
             args = {};
         } else {
@@ -431,15 +441,27 @@ export class CoreSitePluginsProvider {
         if (typeof useOtherData == 'undefined') {
             // No need to add other data, return args as they are.
             return args;
-        } else if (!useOtherData) {
-            // Use other data is defined but empty. Add all the data to args.
-            for (const name in otherData) {
-                args[name] = otherData[name];
-            }
-        } else {
+        } else if (Array.isArray(useOtherData)) {
+            // Include only the properties specified in the array.
             for (const i in useOtherData) {
                 const name = useOtherData[i];
-                args[name] = otherData[name];
+
+                if (typeof otherData[name] == 'object' && otherData[name] !== null) {
+                    // Stringify objects.
+                    args[name] = JSON.stringify(otherData[name]);
+                } else {
+                    args[name] = otherData[name];
+                }
+            }
+        } else {
+            // Add all the data to args.
+            for (const name in otherData) {
+                if (typeof otherData[name] == 'object' && otherData[name] !== null) {
+                    // Stringify objects.
+                    args[name] = JSON.stringify(otherData[name]);
+                } else {
+                    args[name] = otherData[name];
+                }
             }
         }
 
@@ -532,6 +554,13 @@ export class CoreSitePluginsProvider {
     }
 
     /**
+     * Set plugins fetched.
+     */
+    setPluginsFetched(): void {
+        this.fetchPluginsDeferred.resolve();
+    }
+
+    /**
      * Is a plugin being initialised for the specified component?
      *
      * @param {String} component
@@ -549,5 +578,14 @@ export class CoreSitePluginsProvider {
      */
     sitePluginLoaded(component: string): Promise<any> {
         return this.sitePluginPromises[component];
+    }
+
+    /**
+     * Wait for fetch plugins to be done.
+     *
+     * @return {Promise<any>} Promise resolved when site plugins have been fetched.
+     */
+    waitFetchPlugins(): Promise<any> {
+        return this.fetchPluginsDeferred.promise;
     }
 }

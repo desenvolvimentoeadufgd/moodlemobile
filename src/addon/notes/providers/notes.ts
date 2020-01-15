@@ -17,10 +17,11 @@ import { CoreAppProvider } from '@providers/app';
 import { CoreLoggerProvider } from '@providers/logger';
 import { CoreUtilsProvider } from '@providers/utils/utils';
 import { CoreSitesProvider } from '@providers/sites';
-import { CoreSiteWSPreSets } from '@classes/site';
+import { CoreSite, CoreSiteWSPreSets } from '@classes/site';
 import { TranslateService } from '@ngx-translate/core';
 import { CoreUserProvider } from '@core/user/providers/user';
 import { AddonNotesOfflineProvider } from './notes-offline';
+import { CorePushNotificationsProvider } from '@core/pushnotifications/providers/pushnotifications';
 
 /**
  * Service to handle notes.
@@ -33,7 +34,7 @@ export class AddonNotesProvider {
 
     constructor(logger: CoreLoggerProvider, private sitesProvider: CoreSitesProvider, private appProvider: CoreAppProvider,
             private utils: CoreUtilsProvider, private translate: TranslateService, private userProvider: CoreUserProvider,
-            private notesOffline: AddonNotesOfflineProvider) {
+            private notesOffline: AddonNotesOfflineProvider, protected pushNotificationsProvider: CorePushNotificationsProvider) {
         this.logger = logger.getInstance('AddonNotesProvider');
     }
 
@@ -133,6 +134,72 @@ export class AddonNotesProvider {
     }
 
     /**
+     * Delete a note.
+     *
+     * @param  {any} note            Note object to delete.
+     * @param  {number} courseId     Course ID where the note belongs.
+     * @param  {string} [siteId]     Site ID. If not defined, current site.
+     * @return {Promise<void>}       Promise resolved when deleted, rejected otherwise. Promise resolved doesn't mean that notes
+     *                               have been deleted, the resolve param can contain errors for notes not deleted.
+     */
+    deleteNote(note: any, courseId: number, siteId?: string): Promise<void> {
+        siteId = siteId || this.sitesProvider.getCurrentSiteId();
+
+        if (note.offline) {
+            return this.notesOffline.deleteOfflineNote(note.userid, note.content, note.created, siteId);
+        }
+
+        // Convenience function to store the action to be synchronized later.
+        const storeOffline = (): Promise<any> => {
+            return this.notesOffline.deleteNote(note.id, courseId, siteId).then(() => {
+                return false;
+            });
+        };
+
+        if (!this.appProvider.isOnline()) {
+            // App is offline, store the note.
+            return storeOffline();
+        }
+
+        // Send note to server.
+        return this.deleteNotesOnline([note.id], courseId, siteId).then(() => {
+            return true;
+        }).catch((error) => {
+            if (this.utils.isWebServiceError(error)) {
+                // It's a WebService error, the user cannot send the note so don't store it.
+                return Promise.reject(error);
+            }
+
+            // Error sending note, store it to retry later.
+            return storeOffline();
+        });
+    }
+
+    /**
+     * Delete a note. It will fail if offline or cannot connect.
+     *
+     * @param  {number[]} noteIds    Note IDs to delete.
+     * @param  {number} courseId     Course ID where the note belongs.
+     * @param  {string} [siteId]     Site ID. If not defined, current site.
+     * @return {Promise<void>}       Promise resolved when deleted, rejected otherwise. Promise resolved doesn't mean that notes
+     *                               have been deleted, the resolve param can contain errors for notes not deleted.
+     */
+    deleteNotesOnline(noteIds: number[], courseId: number, siteId?: string): Promise<void> {
+        return this.sitesProvider.getSite(siteId).then((site) => {
+            const data = {
+                notes: noteIds
+            };
+
+            return site.write('core_notes_delete_notes', data).then((response) => {
+                // A note was deleted, invalidate the course notes.
+                return this.invalidateNotes(courseId, undefined, siteId).catch(() => {
+                    // Ignore errors.
+                });
+            });
+        });
+    }
+
+    /**
      * Returns whether or not the notes plugin is enabled for a certain site.
      *
      * This method is called quite often and thus should only perform a quick
@@ -159,20 +226,23 @@ export class AddonNotesProvider {
             // The only way to detect if it's enabled is to perform a WS call.
             // We use an invalid user ID (-1) to avoid saving the note if the user has permissions.
             const data = {
-                notes: [
-                    {
-                        userid: -1,
-                        publishstate: 'personal',
-                        courseid: courseId,
-                        text: '',
-                        format: 1
-                    }
-                ]
-            };
+                    notes: [
+                        {
+                            userid: -1,
+                            publishstate: 'personal',
+                            courseid: courseId,
+                            text: '',
+                            format: 1
+                        }
+                    ]
+                },
+                preSets = {
+                    updateFrequency: CoreSite.FREQUENCY_RARELY
+                };
 
             /* Use .read to cache data and be able to check it in offline. This means that, if a user loses the capabilities
                to add notes, he'll still see the option in the app. */
-            return this.utils.promiseWorks(site.read('core_notes_create_notes', data));
+            return this.utils.promiseWorks(site.read('core_notes_create_notes', data, preSets));
         });
     }
 
@@ -231,7 +301,8 @@ export class AddonNotesProvider {
             }
 
             const preSets: CoreSiteWSPreSets = {
-                cacheKey: this.getNotesCacheKey(courseId, userId)
+                cacheKey: this.getNotesCacheKey(courseId, userId),
+                updateFrequency: CoreSite.FREQUENCY_SOMETIMES
             };
 
             if (ignoreCache) {
@@ -259,6 +330,24 @@ export class AddonNotesProvider {
                     return notes;
                 });
             });
+        });
+    }
+
+    /**
+     * Get offline deleted notes and set the state.
+     *
+     * @param  {any[]}   notes     Array of notes.
+     * @param  {number} courseId ID of the course the notes belong to.
+     * @param  {string}  [siteId]  Site ID. If not defined, current site.
+     * @return {Promise<any>}       [description]
+     */
+    setOfflineDeletedNotes(notes: any[], courseId: number, siteId?: string): Promise<any> {
+        return this.notesOffline.getCourseDeletedNotes(courseId, siteId).then((deletedNotes) => {
+            notes.forEach((note) => {
+                note.deleted = deletedNotes.some((n) => n.noteid == note.id);
+            });
+
+            return notes;
         });
     }
 
@@ -317,6 +406,8 @@ export class AddonNotesProvider {
                 courseid: courseId,
                 userid: userId || 0
             };
+
+            this.pushNotificationsProvider.logViewListEvent('notes', 'core_notes_view_notes', params, site.getId());
 
             return site.write('core_notes_view_notes', params);
         });

@@ -21,9 +21,8 @@ import { CoreDomUtilsProvider } from '@providers/utils/dom';
 import { CoreUtilsProvider } from '@providers/utils/utils';
 import { CoreCourseProvider } from '@core/course/providers/course';
 import { CoreCourseActivityPrefetchHandlerBase } from '@core/course/classes/activity-prefetch-handler';
-import { CoreUserProvider } from '@core/user/providers/user';
 import { AddonModGlossaryProvider } from './glossary';
-import { CoreRatingProvider } from '@core/rating/providers/rating';
+import { AddonModGlossarySyncProvider } from './sync';
 
 /**
  * Handler to prefetch forums.
@@ -42,9 +41,8 @@ export class AddonModGlossaryPrefetchHandler extends CoreCourseActivityPrefetchH
             filepoolProvider: CoreFilepoolProvider,
             sitesProvider: CoreSitesProvider,
             domUtils: CoreDomUtilsProvider,
-            private userProvider: CoreUserProvider,
-            private ratingProvider: CoreRatingProvider,
-            private glossaryProvider: AddonModGlossaryProvider) {
+            private glossaryProvider: AddonModGlossaryProvider,
+            private syncProvider: AddonModGlossarySyncProvider) {
 
         super(translate, appProvider, utils, courseProvider, filepoolProvider, sitesProvider, domUtils);
     }
@@ -141,17 +139,17 @@ export class AddonModGlossaryPrefetchHandler extends CoreCourseActivityPrefetchH
                         break;
                     case 'cat': // Not implemented.
                         promises.push(this.glossaryProvider.fetchAllEntries(this.glossaryProvider.getEntriesByCategory,
-                            [glossary.id, AddonModGlossaryProvider.SHOW_ALL_CATERGORIES], false, siteId));
+                            [glossary.id, AddonModGlossaryProvider.SHOW_ALL_CATEGORIES], false, false, siteId));
                         break;
                     case 'date':
                         promises.push(this.glossaryProvider.fetchAllEntries(this.glossaryProvider.getEntriesByDate,
-                            [glossary.id, 'CREATION', 'DESC'], false, siteId));
+                            [glossary.id, 'CREATION', 'DESC'], false, false, siteId));
                         promises.push(this.glossaryProvider.fetchAllEntries(this.glossaryProvider.getEntriesByDate,
-                            [glossary.id, 'UPDATE', 'DESC'], false, siteId));
+                            [glossary.id, 'UPDATE', 'DESC'], false, false, siteId));
                         break;
                     case 'author':
                         promises.push(this.glossaryProvider.fetchAllEntries(this.glossaryProvider.getEntriesByAuthor,
-                            [glossary.id, 'ALL', 'LASTNAME', 'ASC'], false, siteId));
+                            [glossary.id, 'ALL', 'LASTNAME', 'ASC'], false, false, siteId));
                         break;
                     default:
                 }
@@ -159,32 +157,58 @@ export class AddonModGlossaryPrefetchHandler extends CoreCourseActivityPrefetchH
 
             // Fetch all entries to get information from.
             promises.push(this.glossaryProvider.fetchAllEntries(this.glossaryProvider.getEntriesByLetter,
-                    [glossary.id, 'ALL'], false, siteId).then((entries) => {
+                    [glossary.id, 'ALL'], false, false, siteId).then((entries) => {
                 const promises = [];
-                const userIds = [];
+                const avatars = {}; // List of user avatars, preventing duplicates.
 
-                // Fetch user avatars.
                 entries.forEach((entry) => {
-                    // Fetch individual entries.
-                    promises.push(this.glossaryProvider.getEntry(entry.id, siteId).then((entry) => {
-                        // Fetch individual ratings.
-                        return this.ratingProvider.prefetchRatings('module', module.id, glossary.scale, courseId, entry.ratinginfo,
-                            siteId);
-                    }));
+                    // Don't fetch individual entries, it's too many WS calls.
 
-                    userIds.push(entry.userid);
+                    if (entry.userpictureurl) {
+                        avatars[entry.userpictureurl] = true;
+                    }
                 });
 
-                // Prefetch user profiles.
-                promises.push(this.userProvider.prefetchProfiles(userIds, courseId, siteId));
-
-                const files = this.getFilesFromGlossaryAndEntries(module, glossary, entries);
+                // Prefetch intro files, entries files and user avatars.
+                const avatarFiles = Object.keys(avatars).map((url) => {
+                    return { fileurl: url };
+                });
+                const files = this.getFilesFromGlossaryAndEntries(module, glossary, entries).concat(avatarFiles);
                 promises.push(this.filepoolProvider.addFilesToQueue(siteId, files, this.component, module.id));
 
                 return Promise.all(promises);
             }));
 
+            // Get all categories.
+            promises.push(this.glossaryProvider.getAllCategories(glossary.id));
+
+            // Prefetch data for link handlers.
+            promises.push(this.courseProvider.getModuleBasicInfo(module.id, siteId));
+            promises.push(this.courseProvider.getModuleBasicInfoByInstance(glossary.id, 'glossary', siteId));
+
             return Promise.all(promises);
+        });
+    }
+
+    /**
+     * Sync a module.
+     *
+     * @param {any} module Module.
+     * @param {number} courseId Course ID the module belongs to
+     * @param {string} [siteId] Site ID. If not defined, current site.
+     * @return {Promise<any>} Promise resolved when done.
+     */
+    sync(module: any, courseId: number, siteId?: any): Promise<any> {
+        const promises = [
+            this.syncProvider.syncGlossaryEntries(module.instance, undefined, siteId),
+            this.syncProvider.syncRatings(module.id, undefined, siteId)
+        ];
+
+        return Promise.all(promises).then((results) => {
+            return results.reduce((a, b) => ({
+                updated: a.updated || b.updated,
+                warnings: (a.warnings || []).concat(b.warnings || []),
+            }), {updated: false});
         });
     }
 }

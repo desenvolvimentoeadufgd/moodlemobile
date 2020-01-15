@@ -66,7 +66,7 @@ export class CoreTabComponent implements OnInit, OnDestroy {
     @Output() ionSelect: EventEmitter<CoreTabComponent> = new EventEmitter<CoreTabComponent>();
 
     @ContentChild(TemplateRef) template: TemplateRef<any>; // Template defined by the content.
-    @ContentChild(Content) scroll: Content;
+    @ContentChild(Content) content: Content;
 
     element: HTMLElement; // The core-tab element.
     loaded = false;
@@ -121,13 +121,16 @@ export class CoreTabComponent implements OnInit, OnDestroy {
         this.showHideNavBarButtons(true);
 
         // Setup tab scrolling.
-        setTimeout(() => {
-            if (this.scroll) {
-                this.scroll.getScrollElement().onscroll = (e): void => {
-                    this.tabs.showHideTabs(e);
-                };
-            }
-        }, 1);
+        this.domUtils.waitElementToExist(() => this.content ? this.content.getScrollElement() :
+                this.element.querySelector('ion-content > .scroll-content')).then((scroll) => {
+            scroll.addEventListener('scroll', (e): void => {
+                this.tabs.showHideTabs(e.target);
+            });
+
+            this.tabs.showHideTabs(scroll);
+        }).catch(() => {
+            // Ignore errors.
+        });
     }
 
     /**

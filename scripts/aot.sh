@@ -1,12 +1,15 @@
 #!/bin/bash
 
+# List first level of installed libraries so we can check the installed versions.
+npm list --depth=0
+
 # Compile AOT.
 if [ $TRAVIS_BRANCH == 'integration' ] || [ $TRAVIS_BRANCH == 'master' ] || [ $TRAVIS_BRANCH == 'desktop' ] || [ -z $TRAVIS_BRANCH ] ; then
     cd scripts
     ./build_lang.sh
     cd ..
 
-    if [ $TRAVIS_BRANCH == 'master' ] && [ ! -z $GIT_TOKEN ] ; then
+    if [ "$TRAVIS_BRANCH" == 'master' ] && [ ! -z $GIT_TOKEN ] ; then
         git remote set-url origin https://$GIT_TOKEN@github.com/$TRAVIS_REPO_SLUG.git
         git fetch -q origin
         git add src/assets/lang
@@ -17,7 +20,7 @@ if [ $TRAVIS_BRANCH == 'integration' ] || [ $TRAVIS_BRANCH == 'master' ] || [ $T
         version=`grep versionname src/config.json| cut -d: -f2|cut -d'"' -f2`
         date=`date +%Y%m%d`'00'
 
-        pushd ../../moodle-local_moodlemobileapp
+        pushd ../moodle-local_moodlemobileapp
         sed -ie "s/release[ ]*=[ ]*'[^']*';/release = '$version';/1" version.php
         sed -ie "s/version[ ]*=[ ]*[0-9]*;/version = $date;/1" version.php
         rm version.phpe
@@ -40,17 +43,34 @@ if [ ! -z $GIT_ORG ] && [ ! -z $GIT_TOKEN ] ; then
     gitfolder=${PWD##*/}
     git clone --depth 1 --no-single-branch https://github.com/$GIT_ORG/moodlemobile-phonegapbuild.git ../pgb
     pushd ../pgb
+
+    mkdir /tmp/travistemp
+    cp .travis.yml /tmp/travistemp
+    mkdir /tmp/travistemp/scripts
+    cp scripts/* /tmp/travistemp/scripts
+
     git checkout $TRAVIS_BRANCH
-    rm -Rf assets build index.html templates
-    cp -Rf ../$gitfolder/www/* ./
-    rm -Rf assets/countries assets/mimetypes
+
+    rm -Rf assets build index.html templates www destkop
+
+    if [ $TRAVIS_BRANCH == 'desktop' ] ; then
+        cp -Rf ../$gitfolder/desktop ./
+        cp -Rf ../$gitfolder/package.json ./
+        cp -Rf ../$gitfolder/www ./
+        rm -Rf www/assets/countries www/assets/mimetypes
+    else
+        cp -Rf ../$gitfolder/www/* ./
+        rm -Rf assets/countries assets/mimetypes
+    fi
+
+    cp /tmp/travistemp/.travis.yml .travis.yml
+    mkdir scripts
+    cp /tmp/travistemp/scripts/* scripts
+
+
     git add .
     git commit -m "Travis build: $TRAVIS_BUILD_NUMBER"
     git push https://$GIT_TOKEN@github.com/$GIT_ORG/moodlemobile-phonegapbuild.git
     popd
-fi
-
-if [ ! -z $GIT_ORG_PRIVATE ] && [ ! -z $GIT_TOKEN ] && [ $TRAVIS_BRANCH == 'desktop' ] && [ $TRAVIS_OS_NAME == 'linux' ]; then
-    ./scripts/linux.sh
 fi
 

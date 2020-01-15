@@ -49,7 +49,14 @@ export class AddonMessagesSendMessageUserHandler implements CoreUserProfileHandl
      * @return  {boolean|Promise<boolean>}   Promise resolved with true if enabled, resolved with false otherwise.
      */
     isEnabledForUser(user: any, courseId: number, navOptions?: any, admOptions?: any): boolean | Promise<boolean> {
-        return user.id != this.sitesProvider.getCurrentSiteUserId();
+        const currentSite = this.sitesProvider.getCurrentSite();
+
+        if (!currentSite) {
+            return false;
+        }
+
+        // From 3.7 you can send messages to yourself.
+        return user.id != currentSite.getUserId() || currentSite.isVersionGreaterEqualThan('3.7');
     }
 
     /**
@@ -69,7 +76,6 @@ export class AddonMessagesSendMessageUserHandler implements CoreUserProfileHandl
                     showKeyboard: true,
                     userId: user.id
                 };
-                // Always use redirect to make it the new history root (to avoid "loops" in history).
                 this.linkHelper.goInSite(navCtrl, 'AddonMessagesDiscussionPage', pageParams);
             }
         };

@@ -5,9 +5,6 @@ $item-message-note-font-size: 75% !default;
 $item-message-mine-bg: $gray-light !default;
 
 ion-app.app-root page-addon-messages-discussion {
-    .toolbar-title {
-        padding: 0;
-    }
 
     ion-content {
         background-color: $gray-lighter !important;
@@ -47,6 +44,8 @@ ion-app.app-root page-addon-messages-discussion {
         min-height: 0;
         position: relative;
         @include core-transition(width);
+        // This is needed to display bubble tails.
+        overflow: visible;
 
         core-format-text > p:only-child {
             display: inline;
@@ -127,6 +126,15 @@ ion-app.app-root page-addon-messages-discussion {
                 line-height: initial;
             }
         }
+
+        .tail {
+            content: '';
+            width: 0;
+            height: 0;
+            border: 0.5rem solid transparent;
+            position: absolute;
+            touch-action: none;
+        }
     }
 
     .addon-message.addon-message-mine + .addon-message-no-user.addon-message-mine,
@@ -158,9 +166,31 @@ ion-app.app-root page-addon-messages-discussion {
               height: 16px;
             }
         }
+
+        .tail {
+            @include position(null, 0, 0, null);
+            @include margin-horizontal(null, -0.5rem);
+            border-bottom-color: $item-message-mine-bg;
+        }
+
+        &.activated .tail {
+            border-bottom-color: darken($item-message-mine-bg, 10%);
+        }
+    }
+
+    .addon-message-not-mine .tail {
+        @include position(null, null, 0, 0);
+        @include margin-horizontal(-0.5rem, null);
+        border-bottom-color: $item-message-bg;
+    }
+
+    .addon-message-not-mine.activated .tail {
+        border-bottom-color: darken($item-message-bg, 10%);
     }
 
     .toolbar-title {
+        padding: 0;
+
         img {
             @include margin-horizontal(null, 6px);
         }
@@ -176,6 +206,10 @@ ion-app.app-root page-addon-messages-discussion {
 
         ion-icon {
             @include margin-horizontal(6px, null);
+        }
+
+        &.toolbar-title-ios {
+            justify-content: center;
         }
     }
 }

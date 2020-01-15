@@ -30,6 +30,7 @@ import { CoreSitePluginsProvider } from './siteplugins';
 import { CoreCompileProvider } from '@core/compile/providers/compile';
 import { CoreQuestionProvider } from '@core/question/providers/question';
 import { CoreCourseProvider } from '@core/course/providers/course';
+import { CoreCoursesProvider } from '@core/courses/providers/courses';
 
 // Delegates
 import { CoreMainMenuDelegate } from '@core/mainmenu/providers/delegate';
@@ -64,6 +65,8 @@ import { CoreSitePluginsQuizAccessRuleHandler } from '../classes/handlers/quiz-a
 import { CoreSitePluginsAssignFeedbackHandler } from '../classes/handlers/assign-feedback-handler';
 import { CoreSitePluginsAssignSubmissionHandler } from '../classes/handlers/assign-submission-handler';
 import { CoreSitePluginsWorkshopAssessmentStrategyHandler } from '../classes/handlers/workshop-assessment-strategy-handler';
+import { CoreBlockDelegate } from '@core/block/providers/delegate';
+import { CoreSitePluginsBlockHandler } from '@core/siteplugins/classes/handlers/block-handler';
 
 /**
  * Helper service to provide functionalities regarding site plugins. It basically has the features to load and register site
@@ -76,14 +79,17 @@ import { CoreSitePluginsWorkshopAssessmentStrategyHandler } from '../classes/han
  */
 @Injectable()
 export class CoreSitePluginsHelperProvider {
+    protected HANDLER_DISABLED = 'core_site_plugins_helper_handler_disabled';
+
     protected logger;
+    protected courseRestrictHandlers = {};
 
     constructor(logger: CoreLoggerProvider, private sitesProvider: CoreSitesProvider, private domUtils: CoreDomUtilsProvider,
             private mainMenuDelegate: CoreMainMenuDelegate, private moduleDelegate: CoreCourseModuleDelegate,
             private userDelegate: CoreUserDelegate, private langProvider: CoreLangProvider, private http: Http,
             private sitePluginsProvider: CoreSitePluginsProvider, private prefetchDelegate: CoreCourseModulePrefetchDelegate,
             private compileProvider: CoreCompileProvider, private utils: CoreUtilsProvider, private urlUtils: CoreUrlUtilsProvider,
-            private courseOptionsDelegate: CoreCourseOptionsDelegate, eventsProvider: CoreEventsProvider,
+            private courseOptionsDelegate: CoreCourseOptionsDelegate, private eventsProvider: CoreEventsProvider,
             private courseFormatDelegate: CoreCourseFormatDelegate, private profileFieldDelegate: CoreUserProfileFieldDelegate,
             private textUtils: CoreTextUtilsProvider, private filepoolProvider: CoreFilepoolProvider,
             private settingsDelegate: CoreSettingsDelegate, private questionDelegate: CoreQuestionDelegate,
@@ -92,7 +98,7 @@ export class CoreSitePluginsHelperProvider {
             private assignSubmissionDelegate: AddonModAssignSubmissionDelegate, private translate: TranslateService,
             private assignFeedbackDelegate: AddonModAssignFeedbackDelegate, private appProvider: CoreAppProvider,
             private workshopAssessmentStrategyDelegate: AddonWorkshopAssessmentStrategyDelegate,
-            private courseProvider: CoreCourseProvider) {
+            private courseProvider: CoreCourseProvider, private blockDelegate: CoreBlockDelegate) {
 
         this.logger = logger.getInstance('CoreSitePluginsHelperProvider');
 
@@ -107,8 +113,11 @@ export class CoreSitePluginsHelperProvider {
                     }).finally(() => {
                         eventsProvider.trigger(CoreEventsProvider.SITE_PLUGINS_LOADED, {}, data.siteId);
                     });
-
                 }
+            }).catch((e) => {
+                // Ignore errors here.
+            }).finally(() => {
+                this.sitePluginsProvider.setPluginsFetched();
             });
         });
 
@@ -117,6 +126,13 @@ export class CoreSitePluginsHelperProvider {
             if (this.sitePluginsProvider.hasSitePluginsLoaded) {
                 // Temporary fix. Reload the page to unload all plugins.
                 window.location.reload();
+            }
+        });
+
+        // Re-load plugins restricted for courses when the list of user courses changes.
+        eventsProvider.on(CoreCoursesProvider.EVENT_MY_COURSES_CHANGED, (data) => {
+            if (data && data.siteId && data.siteId == this.sitesProvider.getCurrentSiteId() && data.added && data.added.length) {
+                this.reloadCourseRestrictHandlers();
             }
         });
     }
@@ -137,6 +153,11 @@ export class CoreSitePluginsHelperProvider {
             let url = handlerSchema.styles && handlerSchema.styles.url;
             if (url && !this.urlUtils.isAbsoluteURL(url)) {
                 url = this.textUtils.concatenatePaths(site.getURL(), url);
+            }
+
+            if (url && handlerSchema.styles.version) {
+                // Add the version to the URL to prevent getting a cached file.
+                url += (url.indexOf('?') != -1 ? '&' : '?') + 'version=' + handlerSchema.styles.version;
             }
 
             const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
@@ -218,7 +239,9 @@ export class CoreSitePluginsHelperProvider {
             }
 
             // Create a "fake" instance to hold all the libraries.
-            const instance = {};
+            const instance = {
+                HANDLER_DISABLED: this.HANDLER_DISABLED
+            };
             this.compileProvider.injectLibraries(instance);
 
             // Add some data of the WS call result.
@@ -229,6 +252,11 @@ export class CoreSitePluginsHelperProvider {
 
             // Now execute the javascript using this instance.
             result.jsResult = this.compileProvider.executeJavascript(instance, result.javascript);
+
+            if (result.jsResult == this.HANDLER_DISABLED) {
+                // The "disabled" field was added in 3.8, this is a workaround for previous versions.
+                result.disabled = true;
+            }
 
             return result;
         });
@@ -367,6 +395,7 @@ export class CoreSitePluginsHelperProvider {
      */
     loadSitePlugins(plugins: any[]): Promise<any> {
         const promises = [];
+        this.courseRestrictHandlers = {};
 
         plugins.forEach((plugin) => {
             const pluginPromise = this.loadSitePlugin(plugin);
@@ -433,6 +462,13 @@ export class CoreSitePluginsHelperProvider {
         }));
 
         return Promise.all(promises).then(() => {
+            if (result && result.disabled) {
+                // This handler is disabled for the current user, stop.
+                this.logger.warn('Handler disabled by init function', plugin, handlerSchema);
+
+                return;
+            }
+
             if (cssCode) {
                 // Load the styles.
                 this.loadStyles(plugin, handlerName, handlerSchema.styles.url, cssCode, handlerSchema.styles.version, siteId);
@@ -475,6 +511,10 @@ export class CoreSitePluginsHelperProvider {
 
                 case 'CoreQuestionBehaviourDelegate':
                     promise = Promise.resolve(this.registerQuestionBehaviourHandler(plugin, handlerName, handlerSchema));
+                    break;
+
+                case 'CoreBlockDelegate':
+                    promise = Promise.resolve(this.registerBlockHandler(plugin, handlerName, handlerSchema, result));
                     break;
 
                 case 'AddonMessageOutputDelegate':
@@ -541,7 +581,7 @@ export class CoreSitePluginsHelperProvider {
         this.logger.debug('Register site plugin', plugin, handlerSchema);
 
         // Execute the main method and its JS. The template returned will be used in the right component.
-        return this.executeMethodAndJS(plugin, handlerSchema.method).then((result) => {
+        return this.executeMethodAndJS(plugin, handlerSchema.method).then((result): any => {
 
             // Create and register the handler.
             const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
@@ -564,7 +604,7 @@ export class CoreSitePluginsHelperProvider {
 
             delegate.registerHandler(handler);
 
-            return handlerSchema.moodlecomponent || plugin.component;
+            return uniqueName;
         }).catch((err) => {
             this.logger.error('Error executing main method', plugin.component, handlerSchema.method, err);
         });
@@ -611,6 +651,28 @@ export class CoreSitePluginsHelperProvider {
     }
 
     /**
+     * Given a handler in a plugin, register it in the block delegate.
+     *
+     * @param {any} plugin Data of the plugin.
+     * @param {string} handlerName Name of the handler in the plugin.
+     * @param {any} handlerSchema Data about the handler.
+     * @param {any} initResult Result of init function.
+     * @return {string|Promise<string>} A string (or a promise resolved with a string) to identify the handler.
+     */
+    protected registerBlockHandler(plugin: any, handlerName: string, handlerSchema: any, initResult: any):
+            string | Promise<string> {
+
+        const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
+            blockName = (handlerSchema.moodlecomponent || plugin.component).replace('block_', ''),
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname');
+
+        this.blockDelegate.registerHandler(
+            new CoreSitePluginsBlockHandler(uniqueName, prefixedTitle, blockName, handlerSchema, initResult));
+
+        return uniqueName;
+    }
+
+    /**
      * Given a handler in a plugin, register it in the course format delegate.
      *
      * @param {any} plugin Data of the plugin.
@@ -626,7 +688,7 @@ export class CoreSitePluginsHelperProvider {
             formatName = (handlerSchema.moodlecomponent || plugin.component).replace('format_', '');
         this.courseFormatDelegate.registerHandler(new CoreSitePluginsCourseFormatHandler(uniqueName, formatName, handlerSchema));
 
-        return formatName;
+        return uniqueName;
     }
 
     /**
@@ -650,10 +712,21 @@ export class CoreSitePluginsHelperProvider {
 
         // Create and register the handler.
         const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
-            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title);
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname'),
+            handler = new CoreSitePluginsCourseOptionHandler(uniqueName, prefixedTitle, plugin,
+                    handlerSchema, initResult, this.sitePluginsProvider, this.utils);
 
-        this.courseOptionsDelegate.registerHandler(new CoreSitePluginsCourseOptionHandler(uniqueName, prefixedTitle, plugin,
-                handlerSchema, initResult, this.sitePluginsProvider));
+        this.courseOptionsDelegate.registerHandler(handler);
+
+        if (initResult && initResult.restrict && initResult.restrict.courses) {
+            // This handler is restricted to certan courses, store it in the list.
+            this.courseRestrictHandlers[uniqueName] = {
+                plugin: plugin,
+                handlerName: handlerName,
+                handlerSchema: handlerSchema,
+                handler: handler
+            };
+        }
 
         return uniqueName;
     }
@@ -679,7 +752,7 @@ export class CoreSitePluginsHelperProvider {
 
         // Create and register the handler.
         const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
-            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title);
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname');
 
         this.mainMenuDelegate.registerHandler(
                 new CoreSitePluginsMainMenuHandler(uniqueName, prefixedTitle, plugin, handlerSchema, initResult));
@@ -708,7 +781,7 @@ export class CoreSitePluginsHelperProvider {
 
         // Create and register the handler.
         const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
-            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title),
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname'),
             processorName = (handlerSchema.moodlecomponent || plugin.component).replace('message_', '');
 
         this.messageOutputDelegate.registerHandler(new CoreSitePluginsMessageOutputHandler(uniqueName, processorName,
@@ -749,7 +822,7 @@ export class CoreSitePluginsHelperProvider {
                 this.sitePluginsProvider, plugin.component, uniqueName, modName, handlerSchema));
         }
 
-        return modName;
+        return uniqueName;
     }
 
     /**
@@ -827,7 +900,7 @@ export class CoreSitePluginsHelperProvider {
 
         // Create and register the handler.
         const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
-            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title);
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname');
 
         this.settingsDelegate.registerHandler(
                 new CoreSitePluginsSettingsHandler(uniqueName, prefixedTitle, plugin, handlerSchema, initResult));
@@ -856,10 +929,21 @@ export class CoreSitePluginsHelperProvider {
 
         // Create and register the handler.
         const uniqueName = this.sitePluginsProvider.getHandlerUniqueName(plugin, handlerName),
-            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title);
+            prefixedTitle = this.getPrefixedString(plugin.addon, handlerSchema.displaydata.title || 'pluginname'),
+            handler = new CoreSitePluginsUserProfileHandler(uniqueName, prefixedTitle, plugin, handlerSchema,
+                    initResult, this.sitePluginsProvider, this.utils);
 
-        this.userDelegate.registerHandler(new CoreSitePluginsUserProfileHandler(uniqueName, prefixedTitle, plugin, handlerSchema,
-                initResult, this.sitePluginsProvider));
+        this.userDelegate.registerHandler(handler);
+
+        if (initResult && initResult.restrict && initResult.restrict.courses) {
+            // This handler is restricted to certan courses, store it in the list.
+            this.courseRestrictHandlers[uniqueName] = {
+                plugin: plugin,
+                handlerName: handlerName,
+                handlerSchema: handlerSchema,
+                handler: handler
+            };
+        }
 
         return uniqueName;
     }
@@ -900,6 +984,42 @@ export class CoreSitePluginsHelperProvider {
             const strategyName = (handlerSchema.moodlecomponent || plugin.component).replace('workshopform_', '');
 
             return new CoreSitePluginsWorkshopAssessmentStrategyHandler(uniqueName, strategyName);
+        });
+    }
+
+    /**
+     * Reload the handlers that are restricted to certain courses.
+     *
+     * @return {Promise<any>} Promise resolved when done.
+     */
+    protected reloadCourseRestrictHandlers(): Promise<any> {
+        if (!Object.keys(this.courseRestrictHandlers).length) {
+            // No course restrict handlers, nothing to do.
+            return Promise.resolve();
+        }
+
+        const promises = [];
+
+        for (const name in this.courseRestrictHandlers) {
+            const data = this.courseRestrictHandlers[name];
+
+            if (!data.handler || !data.handler.setInitResult) {
+                // No handler or it doesn't implement a required function, ignore it.
+                continue;
+            }
+
+            // Mark the handler as being updated.
+            data.handler.updatingInit && data.handler.updatingInit();
+
+            promises.push(this.executeHandlerInit(data.plugin, data.handlerSchema).then((initResult) => {
+                data.handler.setInitResult(initResult);
+            }).catch((error) => {
+                this.logger.error('Error reloading course restrict handler', error, data.plugin);
+            }));
+        }
+
+        return Promise.all(promises).then(() => {
+            this.eventsProvider.trigger(CoreEventsProvider.SITE_PLUGINS_COURSE_RESTRICT_UPDATED, {});
         });
     }
 }

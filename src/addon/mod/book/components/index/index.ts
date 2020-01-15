@@ -19,6 +19,7 @@ import { CoreCourseProvider } from '@core/course/providers/course';
 import { CoreCourseModuleMainResourceComponent } from '@core/course/classes/main-resource-component';
 import { AddonModBookProvider, AddonModBookContentsMap, AddonModBookTocChapter } from '../../providers/book';
 import { AddonModBookPrefetchHandler } from '../../providers/prefetch-handler';
+import { CoreTagProvider } from '@core/tag/providers/tag';
 
 /**
  * Component that displays a book.
@@ -34,6 +35,7 @@ export class AddonModBookIndexComponent extends CoreCourseModuleMainResourceComp
     chapterContent: string;
     previousChapter: string;
     nextChapter: string;
+    tagsEnabled: boolean;
 
     protected chapters: AddonModBookTocChapter[];
     protected currentChapter: string;
@@ -41,7 +43,7 @@ export class AddonModBookIndexComponent extends CoreCourseModuleMainResourceComp
 
     constructor(injector: Injector, private bookProvider: AddonModBookProvider, private courseProvider: CoreCourseProvider,
             private appProvider: CoreAppProvider, private prefetchDelegate: AddonModBookPrefetchHandler,
-            private modalCtrl: ModalController, @Optional() private content: Content) {
+            private modalCtrl: ModalController, private tagProvider: CoreTagProvider, @Optional() private content: Content) {
         super(injector);
     }
 
@@ -50,6 +52,8 @@ export class AddonModBookIndexComponent extends CoreCourseModuleMainResourceComp
      */
     ngOnInit(): void {
         super.ngOnInit();
+
+        this.tagsEnabled = this.tagProvider.areTagsAvailableInSite();
 
         this.loadContent();
     }
@@ -184,9 +188,9 @@ export class AddonModBookIndexComponent extends CoreCourseModuleMainResourceComp
             this.nextChapter = this.bookProvider.getNextChapter(this.chapters, chapterId);
 
             // Chapter loaded, log view. We don't return the promise because we don't want to block the user for this.
-            this.bookProvider.logView(this.module.instance, chapterId).then(() => {
+            this.bookProvider.logView(this.module.instance, chapterId, this.module.name).then(() => {
                 // Module is completed when last chapter is viewed, so we only check completion if the last is reached.
-                if (!this.nextChapter) {
+                if (this.nextChapter == '0') {
                     this.courseProvider.checkModuleCompletion(this.courseId, this.module.completiondata);
                 }
             }).catch(() => {

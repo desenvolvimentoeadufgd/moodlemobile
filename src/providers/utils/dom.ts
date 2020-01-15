@@ -14,16 +14,19 @@
 
 import { Injectable, SimpleChange } from '@angular/core';
 import {
-    LoadingController, Loading, ToastController, Toast, AlertController, Alert, Platform, Content,
-    ModalController
+    LoadingController, Loading, ToastController, Toast, AlertController, Alert, Platform, Content, PopoverController,
+    ModalController,
 } from 'ionic-angular';
 import { DomSanitizer } from '@angular/platform-browser';
 import { TranslateService } from '@ngx-translate/core';
 import { CoreTextUtilsProvider } from './text';
 import { CoreAppProvider } from '../app';
 import { CoreConfigProvider } from '../config';
+import { CoreConfigConstants } from '../../configconstants';
 import { CoreUrlUtilsProvider } from './url';
+import { CoreFileProvider } from '@providers/file';
 import { CoreConstants } from '@core/constants';
+import { CoreBSTooltipComponent } from '@components/bs-tooltip/bs-tooltip';
 import { Md5 } from 'ts-md5/dist/md5';
 import { Subject } from 'rxjs';
 
@@ -65,11 +68,16 @@ export class CoreDomUtilsProvider {
     constructor(private translate: TranslateService, private loadingCtrl: LoadingController, private toastCtrl: ToastController,
             private alertCtrl: AlertController, private textUtils: CoreTextUtilsProvider, private appProvider: CoreAppProvider,
             private platform: Platform, private configProvider: CoreConfigProvider, private urlUtils: CoreUrlUtilsProvider,
-            private modalCtrl: ModalController, private sanitizer: DomSanitizer) {
+            private modalCtrl: ModalController, private sanitizer: DomSanitizer, private popoverCtrl: PopoverController,
+            private fileProvider: CoreFileProvider) {
 
         // Check if debug messages should be displayed.
         configProvider.get(CoreConstants.SETTINGS_DEBUG_DISPLAY, false).then((debugDisplay) => {
             this.debugDisplay = !!debugDisplay;
+        });
+        // Set the font size based on user preference.
+        configProvider.get(CoreConstants.SETTINGS_FONT_SIZE, CoreConfigConstants.font_sizes[0]).then((fontSize) => {
+            document.documentElement.style.fontSize = fontSize + '%';
         });
     }
 
@@ -127,28 +135,73 @@ export class CoreDomUtilsProvider {
      */
     confirmDownloadSize(size: any, message?: string, unknownMessage?: string, wifiThreshold?: number, limitedThreshold?: number,
             alwaysConfirm?: boolean): Promise<void> {
-        wifiThreshold = typeof wifiThreshold == 'undefined' ? CoreConstants.WIFI_DOWNLOAD_THRESHOLD : wifiThreshold;
-        limitedThreshold = typeof limitedThreshold == 'undefined' ? CoreConstants.DOWNLOAD_THRESHOLD : limitedThreshold;
+        const readableSize = this.textUtils.bytesToSize(size.size, 2);
 
-        if (size.size < 0 || (size.size == 0 && !size.total)) {
-            // Seems size was unable to be calculated. Show a warning.
-            unknownMessage = unknownMessage || 'core.course.confirmdownloadunknownsize';
+        const getAvailableBytes = new Promise((resolve): void => {
+            if (this.appProvider.isDesktop()) {
+                // Free space calculation is not supported on desktop.
+                resolve(null);
+            } else {
+                this.fileProvider.calculateFreeSpace().then((availableBytes) => {
+                    if (this.platform.is('android')) {
+                        return availableBytes;
+                    } else {
+                        // Space calculation is not accurate on iOS, but it gets more accurate when space is lower.
+                        // We'll only use it when space is <500MB, or we're downloading more than twice the reported space.
+                        if (availableBytes < CoreConstants.IOS_FREE_SPACE_THRESHOLD || size.size > availableBytes / 2) {
+                            return availableBytes;
+                        } else {
+                            return null;
+                        }
+                    }
+                }).then((availableBytes) => {
+                    resolve(availableBytes);
+                });
+            }
+        });
 
-            return this.showConfirm(this.translate.instant(unknownMessage));
-        } else if (!size.total) {
-            // Filesize is only partial.
-            const readableSize = this.textUtils.bytesToSize(size.size, 2);
+        const getAvailableSpace = getAvailableBytes.then((availableBytes: number) => {
+            if (availableBytes === null) {
+                return '';
+            } else {
+                const availableSize = this.textUtils.bytesToSize(availableBytes, 2);
+                if (this.platform.is('android') && size.size > availableBytes - CoreConstants.MINIMUM_FREE_SPACE) {
+                    return Promise.reject(this.translate.instant('core.course.insufficientavailablespace', { size: readableSize }));
+                }
 
-            return this.showConfirm(this.translate.instant('core.course.confirmpartialdownloadsize', { size: readableSize }));
-        } else if (alwaysConfirm || size.size >= wifiThreshold ||
+                return this.translate.instant('core.course.availablespace', {available: availableSize});
+            }
+        });
+
+        return getAvailableSpace.then((availableSpace) => {
+            wifiThreshold = typeof wifiThreshold == 'undefined' ? CoreConstants.WIFI_DOWNLOAD_THRESHOLD : wifiThreshold;
+            limitedThreshold = typeof limitedThreshold == 'undefined' ? CoreConstants.DOWNLOAD_THRESHOLD : limitedThreshold;
+
+            let wifiPrefix = '';
+            if (this.appProvider.isNetworkAccessLimited()) {
+                wifiPrefix = this.translate.instant('core.course.confirmlimiteddownload');
+            }
+
+            if (size.size < 0 || (size.size == 0 && !size.total)) {
+                // Seems size was unable to be calculated. Show a warning.
+                unknownMessage = unknownMessage || 'core.course.confirmdownloadunknownsize';
+
+                return this.showConfirm(wifiPrefix + this.translate.instant(unknownMessage, {availableSpace: availableSpace}));
+            } else if (!size.total) {
+                // Filesize is only partial.
+
+                return this.showConfirm(wifiPrefix + this.translate.instant('core.course.confirmpartialdownloadsize',
+                    { size: readableSize, availableSpace: availableSpace }));
+            } else if (alwaysConfirm || size.size >= wifiThreshold ||
                 (this.appProvider.isNetworkAccessLimited() && size.size >= limitedThreshold)) {
-            message = message || 'core.course.confirmdownload';
-            const readableSize = this.textUtils.bytesToSize(size.size, 2);
+                message = message || 'core.course.confirmdownload';
 
-            return this.showConfirm(this.translate.instant(message, { size: readableSize }));
-        }
+                return this.showConfirm(wifiPrefix + this.translate.instant(message,
+                    { size: readableSize, availableSpace: availableSpace }));
+            }
 
-        return Promise.resolve();
+            return Promise.resolve();
+        });
     }
 
     /**
@@ -273,6 +326,33 @@ export class CoreDomUtilsProvider {
         });
 
         return urls;
+    }
+
+    /**
+     * Fix syntax errors in HTML.
+     *
+     * @param {string} html HTML text.
+     * @return {string} Fixed HTML text.
+     */
+    fixHtml(html: string): string {
+        this.template.innerHTML = html;
+
+        const attrNameRegExp = /[^\x00-\x20\x7F-\x9F"'>\/=]+/;
+
+        const fixElement = (element: Element): void => {
+            // Remove attributes with an invalid name.
+            Array.from(element.attributes).forEach((attr) => {
+                if (!attrNameRegExp.test(attr.name)) {
+                    element.removeAttributeNode(attr);
+                }
+            });
+
+            Array.from(element.children).forEach(fixElement);
+        };
+
+        Array.from(this.template.content.children).forEach(fixElement);
+
+        return this.template.innerHTML;
     }
 
     /**
@@ -551,6 +631,64 @@ export class CoreDomUtilsProvider {
     }
 
     /**
+     * Get the error message from an error, including debug data if needed.
+     *
+     * @param {any} error Message to show.
+     * @param {boolean} [needsTranslate] Whether the error needs to be translated.
+     * @return {string} Error message, null if no error should be displayed.
+     */
+    getErrorMessage(error: any, needsTranslate?: boolean): string {
+        let extraInfo = '';
+
+        if (typeof error == 'object') {
+            if (this.debugDisplay) {
+                // Get the debug info. Escape the HTML so it is displayed as it is in the view.
+                if (error.debuginfo) {
+                    extraInfo = '<br><br>' + this.textUtils.escapeHTML(error.debuginfo);
+                }
+                if (error.backtrace) {
+                    extraInfo += '<br><br>' + this.textUtils.replaceNewLines(this.textUtils.escapeHTML(error.backtrace), '<br>');
+                }
+
+                // tslint:disable-next-line
+                console.error(error);
+            }
+
+            // We received an object instead of a string. Search for common properties.
+            if (error.coreCanceled) {
+                // It's a canceled error, don't display an error.
+                return null;
+            }
+
+            error = this.textUtils.getErrorMessageFromError(error);
+            if (!error) {
+                // No common properties found, just stringify it.
+                error = JSON.stringify(error);
+                extraInfo = ''; // No need to add extra info because it's already in the error.
+            }
+
+            // Try to remove tokens from the contents.
+            const matches = error.match(/token"?[=|:]"?(\w*)/, '');
+            if (matches && matches[1]) {
+                error = error.replace(new RegExp(matches[1], 'g'), 'secret');
+            }
+        }
+
+        if (error == CoreConstants.DONT_SHOW_ERROR) {
+            // The error shouldn't be shown, stop.
+            return null;
+        }
+
+        let message = this.textUtils.decodeHTML(needsTranslate ? this.translate.instant(error) : error);
+
+        if (extraInfo) {
+            message += extraInfo;
+        }
+
+        return message;
+    }
+
+    /**
      * Retrieve component/directive instance.
      * Please use this function only if you cannot retrieve the instance using parent/child methods: ViewChild (or similar)
      * or Angular's injection.
@@ -562,6 +700,84 @@ export class CoreDomUtilsProvider {
         const id = element.getAttribute(this.INSTANCE_ID_ATTR_NAME);
 
         return this.instances[id];
+    }
+
+    /**
+     * Wait an element to exists using the findFunction.
+     *
+     * @param {Function} findFunction The function used to find the element.
+     * @return {Promise<HTMLElement>} Resolved if found, rejected if too many tries.
+     */
+    waitElementToExist(findFunction: Function): Promise<HTMLElement> {
+        const promiseInterval = {
+            promise: null,
+            resolve: null,
+            reject: null
+        };
+
+        let tries = 100;
+
+        promiseInterval.promise = new Promise((resolve, reject): void => {
+            promiseInterval.resolve = resolve;
+            promiseInterval.reject = reject;
+        });
+
+        const clear = setInterval(() => {
+            const element: HTMLElement = findFunction();
+
+            if (element) {
+                clearInterval(clear);
+                promiseInterval.resolve(element);
+            } else {
+                tries--;
+
+                if (tries <= 0) {
+                    clearInterval(clear);
+                    promiseInterval.reject();
+                }
+            }
+        }, 100);
+
+        return promiseInterval.promise;
+    }
+
+    /**
+     * Handle bootstrap tooltips in a certain element.
+     *
+     * @param {HTMLElement} element Element to check.
+     */
+    handleBootstrapTooltips(element: HTMLElement): void {
+        const els = Array.from(element.querySelectorAll('[data-toggle="tooltip"]'));
+
+        els.forEach((el) => {
+            const content = el.getAttribute('title') || el.getAttribute('data-original-title'),
+                trigger = el.getAttribute('data-trigger') || 'hover focus',
+                treated = el.getAttribute('data-bstooltip-treated');
+
+            if (!content || treated === 'true' ||
+                    (trigger.indexOf('hover') == -1 && trigger.indexOf('focus') == -1 && trigger.indexOf('click') == -1)) {
+                return;
+            }
+
+            el.setAttribute('data-bstooltip-treated', 'true'); // Mark it as treated.
+
+            // Store the title in data-original-title instead of title, like BS does.
+            el.setAttribute('data-original-title', content);
+            el.setAttribute('title', '');
+
+            el.addEventListener('click', (e) => {
+                const html = el.getAttribute('data-html');
+
+                const popover = this.popoverCtrl.create(CoreBSTooltipComponent, {
+                    content: content,
+                    html: html === 'true'
+                });
+
+                popover.present({
+                    ev: e
+                });
+            });
+        });
     }
 
     /**
@@ -618,16 +834,18 @@ export class CoreDomUtilsProvider {
      *
      * @param {HTMLElement} oldParent The old parent.
      * @param {HTMLElement} newParent The new parent.
+     * @param {boolean} [prepend] If true, adds the children to the beginning of the new parent.
      * @return {Node[]} List of moved children.
      */
-    moveChildren(oldParent: HTMLElement, newParent: HTMLElement): Node[] {
+    moveChildren(oldParent: HTMLElement, newParent: HTMLElement, prepend?: boolean): Node[] {
         const movedChildren: Node[] = [];
+        const referenceNode = prepend ? newParent.firstChild : null;
 
         while (oldParent.childNodes.length > 0) {
             const child = oldParent.childNodes[0];
             movedChildren.push(child);
 
-            newParent.appendChild(child);
+            newParent.insertBefore(child, referenceNode);
         }
 
         return movedChildren;
@@ -990,10 +1208,10 @@ export class CoreDomUtilsProvider {
      * @param {string} [title] Title of the modal.
      * @param {string} [okText] Text of the OK button.
      * @param {string} [cancelText] Text of the Cancel button.
-     * @param {any} [options] More options. See https://ionicframework.com/docs/api/components/alert/AlertController/
-     * @return {Promise<void>} Promise resolved if the user confirms and rejected with a canceled error if he cancels.
+     * @param {any} [options] More options. See https://ionicframework.com/docs/v3/api/components/alert/AlertController/
+     * @return {Promise<any>} Promise resolved if the user confirms and rejected with a canceled error if he cancels.
      */
-    showConfirm(message: string, title?: string, okText?: string, cancelText?: string, options?: any): Promise<void> {
+    showConfirm(message: string, title?: string, okText?: string, cancelText?: string, options?: any): Promise<any> {
         return new Promise<void>((resolve, reject): void => {
             const hasHTMLTags = this.textUtils.hasHTMLTags(message);
             let promise;
@@ -1023,8 +1241,8 @@ export class CoreDomUtilsProvider {
                     },
                     {
                         text: okText || this.translate.instant('core.ok'),
-                        handler: (): void => {
-                            resolve();
+                        handler: (data: any): void => {
+                            resolve(data);
                         }
                     }
                 ];
@@ -1051,51 +1269,11 @@ export class CoreDomUtilsProvider {
      * @return {Promise<Alert>} Promise resolved with the alert modal.
      */
     showErrorModal(error: any, needsTranslate?: boolean, autocloseTime?: number): Promise<Alert> {
-        let extraInfo = '';
+        const message = this.getErrorMessage(error, needsTranslate);
 
-        if (typeof error == 'object') {
-            if (this.debugDisplay) {
-                // Get the debug info. Escape the HTML so it is displayed as it is in the view.
-                if (error.debuginfo) {
-                    extraInfo = '<br><br>' + this.textUtils.escapeHTML(error.debuginfo);
-                }
-                if (error.backtrace) {
-                    extraInfo += '<br><br>' + this.textUtils.replaceNewLines(this.textUtils.escapeHTML(error.backtrace), '<br>');
-                }
-
-                // tslint:disable-next-line
-                console.error(error);
-            }
-
-            // We received an object instead of a string. Search for common properties.
-            if (error.coreCanceled) {
-                // It's a canceled error, don't display an error.
-                return;
-            }
-
-            error = this.textUtils.getErrorMessageFromError(error);
-            if (!error) {
-                // No common properties found, just stringify it.
-                error = JSON.stringify(error);
-                extraInfo = ''; // No need to add extra info because it's already in the error.
-            }
-
-            // Try to remove tokens from the contents.
-            const matches = error.match(/token"?[=|:]"?(\w*)/, '');
-            if (matches && matches[1]) {
-                error = error.replace(new RegExp(matches[1], 'g'), 'secret');
-            }
-        }
-
-        if (error == CoreConstants.DONT_SHOW_ERROR) {
-            // The error shouldn't be shown, stop.
-            return;
-        }
-
-        let message = this.textUtils.decodeHTML(needsTranslate ? this.translate.instant(error) : error);
-
-        if (extraInfo) {
-            message += extraInfo;
+        if (message === null) {
+            // Message doesn't need to be displayed, stop.
+            return Promise.resolve(null);
         }
 
         return this.showAlert(this.getErrorTitle(message), message, undefined, autocloseTime);
@@ -1163,11 +1341,14 @@ export class CoreDomUtilsProvider {
                 content: text
             }),
             dismiss = loader.dismiss.bind(loader);
-        let isDismissed = false;
+        let isPresented = false,
+            isDismissed = false;
 
         // Override dismiss to prevent dismissing a modal twice (it can throw an error and cause problems).
         loader.dismiss = (data, role, navOptions): Promise<any> => {
-            if (isDismissed) {
+            if (!isPresented || isDismissed) {
+                isDismissed = true;
+
                 return Promise.resolve();
             }
 
@@ -1176,7 +1357,13 @@ export class CoreDomUtilsProvider {
             return dismiss(data, role, navOptions);
         };
 
-        loader.present();
+        // Wait a bit before presenting the modal, to prevent it being displayed if dissmiss is called fast.
+        setTimeout(() => {
+            if (!isDismissed) {
+                isPresented = true;
+                loader.present();
+            }
+        }, 40);
 
         return loader;
     }
@@ -1248,9 +1435,12 @@ export class CoreDomUtilsProvider {
      * @param {boolean} [needsTranslate] Whether the 'text' needs to be translated.
      * @param {number} [duration=2000] Duration in ms of the dimissable toast.
      * @param {string} [cssClass=""] Class to add to the toast.
+     * @param {boolean} [dismissOnPageChange=true] Dismiss the Toast on page change.
      * @return {Toast} Toast instance.
      */
-    showToast(text: string, needsTranslate?: boolean, duration: number = 2000, cssClass: string = ''): Toast {
+    showToast(text: string, needsTranslate?: boolean, duration: number = 2000, cssClass: string = '',
+            dismissOnPageChange: boolean = true): Toast {
+
         if (needsTranslate) {
             text = this.translate.instant(text);
         }
@@ -1260,7 +1450,7 @@ export class CoreDomUtilsProvider {
             duration: duration,
             position: 'bottom',
             cssClass: cssClass,
-            dismissOnPageChange: true
+            dismissOnPageChange: dismissOnPageChange
         });
 
         loader.present();

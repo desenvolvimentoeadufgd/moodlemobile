@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChange } from '@angular/core';
+import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChange, Optional } from '@angular/core';
 import { NavController } from 'ionic-angular';
 import { CoreSitesProvider } from '@providers/sites';
 import { CoreAppProvider } from '@providers/app';
 import { CoreUtilsProvider } from '@providers/utils/utils';
 import { CoreEventsProvider } from '@providers/events';
 import { CoreUserProvider } from '@core/user/providers/user';
+import { CoreSplitViewComponent } from '@components/split-view/split-view';
 
 /**
  * Component to display a "user avatar".
@@ -38,18 +39,23 @@ export class CoreUserAvatarComponent implements OnInit, OnChanges, OnDestroy {
     @Input() protected userId?: number; // If provided or found it will be used to link the image to the profile.
     @Input() protected courseId?: number;
     @Input() checkOnline = false; // If want to check and show online status.
+    @Input() extraIcon?: string; // Extra icon to show near the avatar.
 
     avatarUrl?: string;
 
     // Variable to check if we consider this user online or not.
     // @TODO: Use setting when available (see MDL-63972) so we can use site setting.
     protected timetoshowusers = 300000; // Miliseconds default.
-    protected myUser = false;
     protected currentUserId: number;
     protected pictureObs;
 
-    constructor(private navCtrl: NavController, private sitesProvider: CoreSitesProvider, private utils: CoreUtilsProvider,
-            private appProvider: CoreAppProvider, eventsProvider: CoreEventsProvider) {
+    constructor(private navCtrl: NavController,
+            private sitesProvider: CoreSitesProvider,
+            private utils: CoreUtilsProvider,
+            private appProvider: CoreAppProvider,
+            eventsProvider: CoreEventsProvider,
+            @Optional() private svComponent: CoreSplitViewComponent) {
+
         this.currentUserId = this.sitesProvider.getCurrentSiteUserId();
 
         this.pictureObs = eventsProvider.on(CoreUserProvider.PROFILE_PICTURE_UPDATED, (data) => {
@@ -91,9 +97,6 @@ export class CoreUserAvatarComponent implements OnInit, OnChanges, OnDestroy {
 
         this.userId = this.userId || (this.user && (this.user.userid || this.user.id));
         this.courseId = this.courseId || (this.user && this.user.courseid);
-
-        // If not available we cannot ensure the avatar is from the current user.
-        this.myUser = this.userId && this.userId == this.currentUserId;
     }
 
     /**
@@ -102,7 +105,7 @@ export class CoreUserAvatarComponent implements OnInit, OnChanges, OnDestroy {
      * @return boolean
      */
     isOnline(): boolean {
-        if (this.myUser || this.utils.isFalseOrZero(this.user.isonline)) {
+        if (this.utils.isFalseOrZero(this.user.isonline)) {
             return false;
         }
 
@@ -124,7 +127,10 @@ export class CoreUserAvatarComponent implements OnInit, OnChanges, OnDestroy {
         if (this.linkProfile && this.userId) {
             event.preventDefault();
             event.stopPropagation();
-            this.navCtrl.push('CoreUserProfilePage', { userId: this.userId, courseId: this.courseId });
+
+            // Decide which navCtrl to use. If this component is inside a split view, use the split view's master nav.
+            const navCtrl = this.svComponent ? this.svComponent.getMasterNav() : this.navCtrl;
+            navCtrl.push('CoreUserProfilePage', { userId: this.userId, courseId: this.courseId });
         }
     }
 

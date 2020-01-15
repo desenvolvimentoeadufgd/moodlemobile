@@ -76,6 +76,18 @@ export interface CoreWSAjaxPreSets {
      * @type {boolean}
      */
     responseExpected?: boolean;
+
+    /**
+     * Whether to use the no-login endpoint instead of the normal one. Use it for requests that don't require authentication.
+     * @type {boolean}
+     */
+    noLogin?: boolean;
+
+    /**
+     * Whether to send the parameters via GET. Only if noLogin is true.
+     * @type {boolean}
+     */
+    useGet?: boolean;
 }
 
 /**
@@ -215,8 +227,7 @@ export class CoreWSProvider {
      *                                 - available: 0 if unknown, 1 if available, -1 if not available.
      */
     callAjax(method: string, data: any, preSets: CoreWSAjaxPreSets): Promise<any> {
-        let siteUrl,
-            ajaxData;
+        let promise;
 
         if (typeof preSets.siteUrl == 'undefined') {
             return rejectWithError(this.createFakeWSError('core.unexpectederror', true));
@@ -228,15 +239,24 @@ export class CoreWSProvider {
             preSets.responseExpected = true;
         }
 
-        ajaxData = [{
-            index: 0,
-            methodname: method,
-            args: this.convertValuesToString(data)
-        }];
+        const script = preSets.noLogin ? 'service-nologin.php' : 'service.php',
+            ajaxData = JSON.stringify([{
+                index: 0,
+                methodname: method,
+                args: this.convertValuesToString(data)
+            }]);
 
-        siteUrl = preSets.siteUrl + '/lib/ajax/service.php';
+        // The info= parameter has no function. It is just to help with debugging.
+        // We call it info to match the parameter name use by Moodle's AMD ajax module.
+        let siteUrl = preSets.siteUrl + '/lib/ajax/' + script + '?info=' + method;
 
-        const promise = this.http.post(siteUrl, JSON.stringify(ajaxData)).timeout(CoreConstants.WS_TIMEOUT).toPromise();
+        if (preSets.noLogin && preSets.useGet) {
+            // Send params using GET.
+            siteUrl += '&args=' + encodeURIComponent(ajaxData);
+            promise = this.http.get(siteUrl).timeout(this.getRequestTimeout()).toPromise();
+        } else {
+            promise = this.http.post(siteUrl, ajaxData).timeout(this.getRequestTimeout()).toPromise();
+        }
 
         return promise.then((data: any) => {
             // Some moodle web services return null.
@@ -284,32 +304,55 @@ export class CoreWSProvider {
 
     /**
      * Converts an objects values to strings where appropriate.
-     * Arrays (associative or otherwise) will be maintained.
+     * Arrays (associative or otherwise) will be maintained, null values will be removed.
      *
      * @param {object} data The data that needs all the non-object values set to strings.
      * @param {boolean} [stripUnicode] If Unicode long chars need to be stripped.
-     * @return {object} The cleaned object, with multilevel array and objects preserved.
+     * @return {object} The cleaned object or null if some strings becomes empty after stripping Unicode.
      */
-    convertValuesToString(data: object, stripUnicode?: boolean): object {
-        let result;
-        if (!Array.isArray(data) && typeof data == 'object') {
-            result = {};
-        } else {
-            result = [];
-        }
+    convertValuesToString(data: any, stripUnicode?: boolean): any {
+        const result: any = Array.isArray(data) ? [] : {};
 
-        for (const el in data) {
-            if (typeof data[el] == 'object') {
-                result[el] = this.convertValuesToString(data[el], stripUnicode);
-            } else {
-                if (typeof data[el] == 'string') {
-                    result[el] = stripUnicode ? this.textUtils.stripUnicode(data[el]) : data[el];
-                    if (stripUnicode && data[el] != result[el] && result[el].trim().length == 0) {
-                        throw new Error();
-                    }
-                } else {
-                    result[el] = data[el] + '';
+        for (const key in data) {
+            let value = data[key];
+
+            if (value == null) {
+                // Skip null or undefined value.
+                continue;
+            } else if (typeof value == 'object') {
+                // Object or array.
+                value = this.convertValuesToString(value, stripUnicode);
+                if (value == null) {
+                    return null;
                 }
+            } else if (typeof value == 'string') {
+                if (stripUnicode) {
+                    const stripped = this.textUtils.stripUnicode(value);
+                    if (stripped != value && stripped.trim().length == 0) {
+                        return null;
+                    }
+                    value = stripped;
+                }
+            } else if (typeof value == 'boolean') {
+                /* Moodle does not allow "true" or "false" in WS parameters, only in POST parameters.
+                   We've been using "true" and "false" for WS settings "filter" and "fileurl",
+                   we keep it this way to avoid changing cache keys. */
+                if (key == 'moodlewssettingfilter' || key == 'moodlewssettingfileurl') {
+                    value = value ? 'true' : 'false';
+                } else {
+                    value = value ? '1' : '0';
+                }
+            } else if (typeof value == 'number') {
+                value = String(value);
+            } else {
+                // Unknown type.
+                continue;
+            }
+
+            if (Array.isArray(result)) {
+                result.push(value);
+            } else {
+                result[key] = value;
             }
         }
 
@@ -474,6 +517,15 @@ export class CoreWSProvider {
     }
 
     /**
+     * Get a request timeout based on the network connection.
+     *
+     * @return {number} Timeout in ms.
+     */
+    getRequestTimeout(): number {
+        return this.appProvider.isNetworkAccessLimited() ? CoreConstants.WS_TIMEOUT : CoreConstants.WS_TIMEOUT_WIFI;
+    }
+
+    /**
      * Get the unique queue item id of the cache for a HTTP request.
      *
      * @param {string} method Method of the HTTP request.
@@ -499,7 +551,7 @@ export class CoreWSProvider {
         let promise = this.getPromiseHttp('head', url);
 
         if (!promise) {
-            promise = this.commonHttp.head(url).timeout(CoreConstants.WS_TIMEOUT).toPromise();
+            promise = this.commonHttp.head(url).timeout(this.getRequestTimeout()).toPromise();
             promise = this.setPromiseHttp(promise, 'head', url);
         }
 
@@ -524,10 +576,15 @@ export class CoreWSProvider {
             options['responseType'] = 'text';
         }
 
-        // Perform the post request.
-        let promise = this.http.post(siteUrl, ajaxData, options).timeout(CoreConstants.WS_TIMEOUT).toPromise();
+        // We add the method name to the URL purely to help with debugging.
+        // This duplicates what is in the ajaxData, but that does no harm.
+        // POST variables take precedence over GET.
+        const requestUrl = siteUrl + '&wsfunction=' + method;
 
-        promise = promise.then((data: any) => {
+        // Perform the post request.
+        const promise = this.http.post(requestUrl, ajaxData, options).timeout(this.getRequestTimeout()).toPromise();
+
+        return promise.then((data: any) => {
             // Some moodle web services return null.
             // If the responseExpected value is set to false, we create a blank object if the response is null.
             if (!data && !preSets.responseExpected) {
@@ -608,10 +665,6 @@ export class CoreWSProvider {
 
             return Promise.reject(this.createFakeWSError('core.serverconnection', true));
         });
-
-        promise = this.setPromiseHttp(promise, 'post', preSets.siteUrl, ajaxData);
-
-        return promise;
     }
 
     /**
@@ -649,7 +702,7 @@ export class CoreWSProvider {
         // HTTP not finished, but we should delete the promise after timeout.
         timeout = setTimeout(() => {
             delete this.ongoingCalls[queueItemId];
-        }, CoreConstants.WS_TIMEOUT);
+        }, this.getRequestTimeout());
 
         // HTTP finished, delete from ongoing.
         return promise.finally(() => {
@@ -692,9 +745,8 @@ export class CoreWSProvider {
             preSets.responseExpected = true;
         }
 
-        try {
-            data = this.convertValuesToString(data, preSets.cleanUnicode);
-        } catch (e) {
+        data = this.convertValuesToString(data || {}, preSets.cleanUnicode);
+        if (data == null) {
             // Empty cleaned text found.
             errorResponse.message = this.translate.instant('core.unicodenotsupportedcleanerror');
 

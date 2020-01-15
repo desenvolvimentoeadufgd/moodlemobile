@@ -63,6 +63,7 @@ export class CoreTabsComponent implements OnInit, AfterViewInit, OnChanges, OnDe
     numTabsShown = 0;
     direction = 'ltr';
     description = '';
+    lastScroll = 0;
 
     protected originalTabsContainer: HTMLElement; // The container of the original tabs. It will include each tab's content.
     protected initialized = false;
@@ -233,7 +234,15 @@ export class CoreTabsComponent implements OnInit, AfterViewInit, OnChanges, OnDe
      */
     calculateTabBarHeight(): void {
         this.tabBarHeight = this.topTabsElement.offsetHeight;
-        this.originalTabsContainer.style.paddingBottom = this.tabBarHeight + 'px';
+
+        if (this.tabsShown) {
+            // Smooth translation.
+            this.topTabsElement.style.transform = 'translateY(-' + this.lastScroll + 'px)';
+            this.originalTabsContainer.style.transform = 'translateY(-' + this.lastScroll + 'px)';
+            this.originalTabsContainer.style.paddingBottom = this.tabBarHeight - this.lastScroll + 'px';
+        } else {
+            this.tabBarElement.classList.add('tabs-hidden');
+        }
     }
 
     /**
@@ -406,22 +415,46 @@ export class CoreTabsComponent implements OnInit, AfterViewInit, OnChanges, OnDe
     /**
      * Show or hide the tabs. This is used when the user is scrolling inside a tab.
      *
-     * @param {any} e Scroll event.
+     * @param {any} scrollElement Scroll element to check scroll position.
      */
-    showHideTabs(e: any): void {
+    showHideTabs(scrollElement: any): void {
         if (!this.tabBarHeight) {
             // We don't have the tab bar height, this means the tab bar isn't shown.
             return;
         }
 
-        if (this.tabsShown && e.target.scrollTop - this.tabBarHeight > this.tabBarHeight) {
-            this.tabBarElement.classList.add('tabs-hidden');
+        const scroll = parseInt(scrollElement.scrollTop, 10);
+        if (scroll == this.lastScroll) {
+            if (scroll == 0) {
+                // Ensure tabbar is shown.
+                this.topTabsElement.style.transform = '';
+                this.originalTabsContainer.style.transform = '';
+                this.originalTabsContainer.style.paddingBottom = this.tabBarHeight + 'px';
+            }
+
+            // Ensure scroll has been modified to avoid flicks.
+            return;
+        }
+
+        if (this.tabsShown && scroll > this.tabBarHeight) {
             this.tabsShown = false;
-        } else if (!this.tabsShown && e.target.scrollTop < this.tabBarHeight) {
-            this.tabBarElement.classList.remove('tabs-hidden');
+
+            // Hide tabs.
+            this.tabBarElement.classList.add('tabs-hidden');
+        } else if (!this.tabsShown && scroll <= this.tabBarHeight) {
             this.tabsShown = true;
+            this.tabBarElement.classList.remove('tabs-hidden');
             this.calculateSlides();
         }
+
+        if (this.tabsShown) {
+            // Smooth translation.
+            this.topTabsElement.style.transform = 'translateY(-' + scroll + 'px)';
+            this.originalTabsContainer.style.transform = 'translateY(-' + scroll + 'px)';
+            this.originalTabsContainer.style.paddingBottom = this.tabBarHeight - scroll + 'px';
+        }
+        // Use lastScroll after moving the tabs to avoid flickering.
+        this.lastScroll = parseInt(scrollElement.scrollTop, 10);
     }
 
     /**
@@ -455,7 +488,7 @@ export class CoreTabsComponent implements OnInit, AfterViewInit, OnChanges, OnDe
         const currentTab = this.getSelected(),
             newTab = this.tabs[index];
 
-        if (!newTab.enabled || !newTab.show) {
+        if (!newTab || !newTab.enabled || !newTab.show) {
             // The tab isn't enabled or shown, stop.
             return;
         }

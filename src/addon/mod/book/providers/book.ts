@@ -23,6 +23,8 @@ import { CoreTextUtilsProvider } from '@providers/utils/text';
 import { CoreUtilsProvider } from '@providers/utils/utils';
 import { CoreCourseProvider } from '@core/course/providers/course';
 import { CoreCourseLogHelperProvider } from '@core/course/providers/log-helper';
+import { CoreSite } from '@classes/site';
+import { CoreTagItem } from '@core/tag/providers/tag';
 
 /**
  * A book chapter inside the toc list.
@@ -51,7 +53,13 @@ export interface AddonModBookTocChapter {
  * Map of book contents. For each chapter it has its index URL and the list of paths of the files the chapter has. Each path
  * is identified by the relative path in the book, and the value is the URL of the file.
  */
-export type AddonModBookContentsMap = {[chapter: string]: {indexUrl?: string, paths: {[path: string]: string}}};
+export type AddonModBookContentsMap = {
+    [chapter: string]: {
+        indexUrl?: string,
+        paths: {[path: string]: string},
+        tags?: CoreTagItem[]
+    }
+};
 
 /**
  * Service that provides some features for books.
@@ -97,7 +105,8 @@ export class AddonModBookProvider {
                     courseids: [courseId]
                 },
                 preSets = {
-                    cacheKey: this.getBookDataCacheKey(courseId)
+                    cacheKey: this.getBookDataCacheKey(courseId),
+                    updateFrequency: CoreSite.FREQUENCY_RARELY
                 };
 
             return site.read('mod_book_get_books_by_courses', params, preSets).then((response) => {
@@ -201,8 +210,9 @@ export class AddonModBookProvider {
                     map[chapter] = map[chapter] || { paths: {} };
 
                     if (content.filename == 'index.html' && filepathIsChapter) {
-                        // Index of the chapter, set indexUrl of the chapter.
+                        // Index of the chapter, set indexUrl and tags of the chapter.
                         map[chapter].indexUrl = content.fileurl;
+                        map[chapter].tags = content.tags;
                     } else {
                         if (filepathIsChapter) {
                             // It's a file in the root folder OR the WS isn't returning the filepath as it should (MDL-53671).
@@ -380,15 +390,17 @@ export class AddonModBookProvider {
      *
      * @param {number} id Module ID.
      * @param {string} chapterId Chapter ID.
+     * @param {string} [name] Name of the book.
      * @param {string} [siteId] Site ID. If not defined, current site.
      * @return {Promise<any>} Promise resolved when the WS call is successful.
      */
-    logView(id: number, chapterId: string, siteId?: string): Promise<any> {
+    logView(id: number, chapterId: string, name?: string, siteId?: string): Promise<any> {
         const params = {
             bookid: id,
             chapterid: chapterId
         };
 
-        return this.logHelper.log('mod_book_view_book', params, AddonModBookProvider.COMPONENT, id, siteId);
+        return this.logHelper.logSingle('mod_book_view_book', params, AddonModBookProvider.COMPONENT, id, name, 'book',
+                {chapterid: chapterId}, siteId);
     }
 }

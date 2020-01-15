@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Component, Input, OnInit, Injector, ViewChild } from '@angular/core';
+import { Component, Input, OnInit, Injector, ViewChild, OnDestroy, DoCheck, KeyValueDiffers } from '@angular/core';
 import { CoreBlockDelegate } from '../../providers/delegate';
 import { CoreDynamicComponent } from '@components/dynamic-component/dynamic-component';
+import { Subscription } from 'rxjs';
+import { CoreEventsProvider } from '@providers/events';
 
 /**
  * Component to render a block.
@@ -23,7 +25,7 @@ import { CoreDynamicComponent } from '@components/dynamic-component/dynamic-comp
     selector: 'core-block',
     templateUrl: 'core-block.html'
 })
-export class CoreBlockComponent implements OnInit {
+export class CoreBlockComponent implements OnInit, OnDestroy, DoCheck {
     @ViewChild(CoreDynamicComponent) dynamicComponent: CoreDynamicComponent;
 
     @Input() block: any; // The block to render.
@@ -31,13 +33,19 @@ export class CoreBlockComponent implements OnInit {
     @Input() instanceId: number; // The instance ID associated with the context level.
     @Input() extraData: any; // Any extra data to be passed to the block.
 
-    title: string; // The title of the block.
     componentClass: any; // The class of the component to render.
     data: any = {}; // Data to pass to the component.
     class: string; // CSS class to apply to the block.
     loaded = false;
 
-    constructor(protected injector: Injector, protected blockDelegate: CoreBlockDelegate) { }
+    blockSubscription: Subscription;
+
+    protected differ: any; // To detect changes in the data input.
+
+    constructor(protected injector: Injector, protected blockDelegate: CoreBlockDelegate, differs: KeyValueDiffers,
+            protected eventsProvider: CoreEventsProvider) {
+        this.differ = differs.find([]).create();
+    }
 
     /**
      * Component being initialized.
@@ -50,27 +58,71 @@ export class CoreBlockComponent implements OnInit {
         }
 
         // Get the data to render the block.
+        this.initBlock();
+    }
+
+    /**
+     * Detect and act upon changes that Angular can’t or won’t detect on its own (objects and arrays).
+     */
+    ngDoCheck(): void {
+        if (this.data) {
+            // Check if there's any change in the extraData object.
+            const changes = this.differ.diff(this.extraData);
+            if (changes) {
+                this.data = Object.assign(this.data, this.extraData || {});
+            }
+        }
+    }
+
+    /**
+     * Get block display data and initialises the block once this is available. If the block is not
+     * supported at the moment, try again if the available blocks are updated (because it comes
+     * from a site plugin).
+     */
+    initBlock(): void {
         this.blockDelegate.getBlockDisplayData(this.injector, this.block, this.contextLevel, this.instanceId).then((data) => {
             if (!data) {
-                // Block not supported, don't render it.
+                // Block not supported, don't render it. But, site plugins might not have finished loading.
+                // Subscribe to the observable in block delegate that will tell us if blocks are updated.
+                // We can retry init later if that happens.
+                this.blockSubscription = this.blockDelegate.blocksUpdateObservable.subscribe(
+                    (): void => {
+                        this.blockSubscription.unsubscribe();
+                        delete this.blockSubscription;
+                        this.initBlock();
+                    }
+                );
+
                 return;
             }
 
-            this.title = data.title;
             this.class = data.class;
             this.componentClass = data.component;
 
             // Set up the data needed by the block component.
             this.data = Object.assign({
+                    title: data.title,
                     block: this.block,
                     contextLevel: this.contextLevel,
                     instanceId: this.instanceId,
+                    link: data.link || null,
+                    linkParams: data.linkParams || null,
                 }, this.extraData || {}, data.componentData || {});
         }).catch(() => {
             // Ignore errors.
         }).finally(() => {
             this.loaded = true;
         });
+    }
+
+    /**
+     * On destroy of the component, clear up any subscriptions.
+     */
+    ngOnDestroy(): void {
+        if (this.blockSubscription) {
+            this.blockSubscription.unsubscribe();
+            delete this.blockSubscription;
+        }
     }
 
     /**

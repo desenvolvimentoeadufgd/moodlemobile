@@ -25,6 +25,7 @@ import { CoreDomUtilsProvider } from '@providers/utils/dom';
 import { CoreTimeUtilsProvider } from '@providers/utils/time';
 import { CoreUrlUtilsProvider } from '@providers/utils/url';
 import { CoreUtilsProvider } from '@providers/utils/utils';
+import { MoodleMobileApp } from '../../../../../app/app.component';
 import { AddonModLessonProvider } from '../../providers/lesson';
 import { AddonModLessonOfflineProvider } from '../../providers/lesson-offline';
 import { AddonModLessonSyncProvider } from '../../providers/lesson-sync';
@@ -85,7 +86,8 @@ export class AddonModLessonPlayerPage implements OnInit, OnDestroy {
             protected lessonHelper: AddonModLessonHelperProvider, protected lessonSync: AddonModLessonSyncProvider,
             protected lessonOfflineProvider: AddonModLessonOfflineProvider, protected cdr: ChangeDetectorRef,
             modalCtrl: ModalController, protected navCtrl: NavController, protected appProvider: CoreAppProvider,
-            protected utils: CoreUtilsProvider, protected urlUtils: CoreUrlUtilsProvider, protected fb: FormBuilder) {
+            protected utils: CoreUtilsProvider, protected urlUtils: CoreUrlUtilsProvider, protected fb: FormBuilder,
+            protected mmApp: MoodleMobileApp) {
 
         this.lessonId = navParams.get('lessonId');
         this.courseId = navParams.get('courseId');
@@ -143,6 +145,13 @@ export class AddonModLessonPlayerPage implements OnInit, OnDestroy {
         }
 
         return Promise.resolve();
+    }
+
+    /**
+     * Runs when the page is about to leave and no longer be the active page.
+     */
+    ionViewWillLeave(): void {
+        this.mmApp.closeModal();
     }
 
     /**
@@ -570,10 +579,15 @@ export class AddonModLessonPlayerPage implements OnInit, OnDestroy {
                 // Button to continue.
                 if (this.lesson.review && !result.correctanswer && !result.noanswer && !result.isessayquestion &&
                        !result.maxattemptsreached) {
-                    this.processData.buttons.push({
-                        label: 'addon.mod_lesson.reviewquestioncontinue',
-                        pageId: result.newpageid
-                    });
+                    /* If both the "Yes, I'd like to try again" and "No, I just want to go on to the next question" point to the
+                       same page then don't show the "No, I just want to go on to the next question" button. It's confusing. */
+                    if (this.pageData.page.id != result.newpageid) {
+                        // Button to continue the lesson (the page to go is configured by the teacher).
+                        this.processData.buttons.push({
+                            label: 'addon.mod_lesson.reviewquestioncontinue',
+                            pageId: result.newpageid
+                        });
+                    }
                 } else {
                     this.processData.buttons.push({
                         label: 'addon.mod_lesson.continue',

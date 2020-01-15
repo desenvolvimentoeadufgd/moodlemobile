@@ -245,15 +245,16 @@ export class CoreCourseModuleMainResourceComponent implements OnInit, OnDestroy,
      * @param {any} event Event.
      */
     gotoBlog(event: any): void {
-        // Always use redirect to make it the new history root (to avoid "loops" in history).
         this.linkHelper.goInSite(this.navCtrl, 'AddonBlogEntriesPage', { cmId: this.module.id });
     }
 
     /**
      * Prefetch the module.
+     *
+     * @param {Function}  [done] Function to call when done.
      */
-    prefetch(): void {
-        this.courseHelper.contextMenuPrefetch(this, this.module, this.courseId);
+    prefetch(done?: () => void): void {
+        this.courseHelper.contextMenuPrefetch(this, this.module, this.courseId, done);
     }
 
     /**

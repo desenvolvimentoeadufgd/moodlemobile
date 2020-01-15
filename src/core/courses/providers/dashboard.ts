@@ -14,6 +14,7 @@
 
 import { Injectable } from '@angular/core';
 import { CoreSitesProvider } from '@providers/sites';
+import { CoreSite } from '@classes/site';
 
 /**
  * Service that provides some features regarding course overview.
@@ -46,9 +47,11 @@ export class CoreCoursesDashboardProvider {
     getDashboardBlocks(userId?: number, siteId?: string): Promise<any[]> {
         return this.sitesProvider.getSite(siteId).then((site) => {
             const params = {
+                    returncontents: 1
                 },
                 preSets = {
-                    cacheKey: this.getDashboardBlocksCacheKey(userId)
+                    cacheKey: this.getDashboardBlocksCacheKey(userId),
+                    updateFrequency: CoreSite.FREQUENCY_RARELY
                 };
 
             if (userId) {
@@ -83,7 +86,36 @@ export class CoreCoursesDashboardProvider {
      */
     isAvailable(siteId?: string): Promise<boolean> {
         return this.sitesProvider.getSite(siteId).then((site) => {
+            // First check if it's disabled.
+            if (this.isDisabledInSite(site)) {
+                return false;
+            }
+
             return site.wsAvailable('core_block_get_dashboard_blocks');
         });
+    }
+
+    /**
+     * Check if Site Home is disabled in a certain site.
+     *
+     * @param {string} [siteId] Site Id. If not defined, use current site.
+     * @return {Promise<boolean>} Promise resolved with true if disabled, rejected or resolved with false otherwise.
+     */
+    isDisabled(siteId?: string): Promise<boolean> {
+        return this.sitesProvider.getSite(siteId).then((site) => {
+            return this.isDisabledInSite(site);
+        });
+    }
+
+    /**
+     * Check if Site Home is disabled in a certain site.
+     *
+     * @param {CoreSite} [site] Site. If not defined, use current site.
+     * @return {boolean} Whether it's disabled.
+     */
+    isDisabledInSite(site?: CoreSite): boolean {
+        site = site || this.sitesProvider.getCurrentSite();
+
+        return site.isFeatureDisabled('CoreMainMenuDelegate_CoreCoursesDashboard');
     }
 }

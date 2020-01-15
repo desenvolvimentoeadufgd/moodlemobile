@@ -223,7 +223,7 @@ export class AddonModLessonIndexComponent extends CoreCourseModuleMainActivityCo
         return this.groupsProvider.getActivityGroupInfo(this.module.id).then((groupInfo) => {
             this.groupInfo = groupInfo;
 
-            return this.setGroup(this.group || 0);
+            return this.setGroup(this.groupsProvider.validateGroupId(this.group, groupInfo));
         }).finally(() => {
             this.reportLoaded = true;
         });
@@ -345,7 +345,7 @@ export class AddonModLessonIndexComponent extends CoreCourseModuleMainActivityCo
      * Log viewing the lesson.
      */
     protected logView(): void {
-        this.lessonProvider.logViewLesson(this.lesson.id, this.password).then(() => {
+        this.lessonProvider.logViewLesson(this.lesson.id, this.password, this.lesson.name).then(() => {
             this.courseProvider.checkModuleCompletion(this.courseId, this.module.completiondata);
         }).catch((error) => {
             // Ignore errors.
@@ -385,9 +385,18 @@ export class AddonModLessonIndexComponent extends CoreCourseModuleMainActivityCo
     }
 
     /**
+     * First tab selected.
+     */
+    indexSelected(): void {
+        this.selectedTab = 0;
+    }
+
+    /**
      * Reports tab selected.
      */
     reportsSelected(): void {
+        this.selectedTab = 1;
+
         if (!this.groupInfo) {
             this.fetchReportData().catch((error) => {
                 this.domUtils.showErrorModalDefault(error, 'Error getting report.');

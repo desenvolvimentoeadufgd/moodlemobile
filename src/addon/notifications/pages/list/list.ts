@@ -21,7 +21,8 @@ import { CoreEventsProvider, CoreEventObserver } from '@providers/events';
 import { CoreSitesProvider } from '@providers/sites';
 import { CoreUtilsProvider } from '@providers/utils/utils';
 import { AddonNotificationsProvider } from '../../providers/notifications';
-import { AddonPushNotificationsDelegate } from '@addon/pushnotifications/providers/delegate';
+import { AddonNotificationsHelperProvider } from '../../providers/helper';
+import { CorePushNotificationsDelegate } from '@core/pushnotifications/providers/delegate';
 
 /**
  * Page that displays the list of notifications.
@@ -40,32 +41,40 @@ export class AddonNotificationsListPage {
     canMarkAllNotificationsAsRead = false;
     loadingMarkAllNotificationsAsRead = false;
 
-    protected readCount = 0;
-    protected unreadCount = 0;
+    protected isCurrentView: boolean;
     protected cronObserver: CoreEventObserver;
     protected pushObserver: Subscription;
+    protected pendingRefresh = false;
 
     constructor(navParams: NavParams, private domUtils: CoreDomUtilsProvider, private eventsProvider: CoreEventsProvider,
             private sitesProvider: CoreSitesProvider, private textUtils: CoreTextUtilsProvider,
             private utils: CoreUtilsProvider, private notificationsProvider: AddonNotificationsProvider,
-            private pushNotificationsDelegate: AddonPushNotificationsDelegate) {
+            private pushNotificationsDelegate: CorePushNotificationsDelegate,
+            private notificationsHelper: AddonNotificationsHelperProvider) {
     }
 
     /**
      * View loaded.
      */
     ionViewDidLoad(): void {
-        this.fetchNotifications().finally(() => {
-            this.notificationsLoaded = true;
-        });
+        this.fetchNotifications();
 
-        this.cronObserver = this.eventsProvider.on(AddonNotificationsProvider.READ_CRON_EVENT, () => this.refreshNotifications(),
-                this.sitesProvider.getCurrentSiteId());
+        this.cronObserver = this.eventsProvider.on(AddonNotificationsProvider.READ_CRON_EVENT, () => {
+            if (this.isCurrentView) {
+                this.notificationsLoaded = false;
+                this.refreshNotifications();
+            }
+        }, this.sitesProvider.getCurrentSiteId());
 
         this.pushObserver = this.pushNotificationsDelegate.on('receive').subscribe((notification) => {
             // New notification received. If it's from current site, refresh the data.
-            if (this.utils.isTrueOrOne(notification.notif) && this.sitesProvider.isCurrentSite(notification.site)) {
+            if (this.isCurrentView && this.utils.isTrueOrOne(notification.notif) &&
+                    this.sitesProvider.isCurrentSite(notification.site)) {
+
+                this.notificationsLoaded = false;
                 this.refreshNotifications();
+            } else if (!this.isCurrentView) {
+                this.pendingRefresh = true;
             }
         });
     }
@@ -79,56 +88,22 @@ export class AddonNotificationsListPage {
     protected fetchNotifications(refresh?: boolean): Promise<any> {
         this.loadMoreError = false;
 
-        if (refresh) {
-            this.readCount = 0;
-            this.unreadCount = 0;
-        }
+        return this.notificationsHelper.getNotifications(refresh ? [] : this.notifications).then((result) => {
+            result.notifications.forEach(this.formatText.bind(this));
 
-        const limit = AddonNotificationsProvider.LIST_LIMIT;
-
-        return this.notificationsProvider.getUnreadNotifications(this.unreadCount, limit).then((unread) => {
-            const promises = [];
-
-            unread.forEach(this.formatText.bind(this));
-
-            /* Don't add the unread notifications to this.notifications yet. If there are no unread notifications
-               that causes that the "There are no notifications" message is shown in pull to refresh. */
-            this.unreadCount += unread.length;
-
-            if (unread.length < limit) {
-                // Limit not reached. Get read notifications until reach the limit.
-                const readLimit = limit - unread.length;
-                promises.push(this.notificationsProvider.getReadNotifications(this.readCount, readLimit).then((read) => {
-                    read.forEach(this.formatText.bind(this));
-                    this.readCount += read.length;
-                    if (refresh) {
-                        this.notifications = unread.concat(read);
-                    } else {
-                        this.notifications = this.notifications.concat(unread, read);
-                    }
-                    this.canLoadMore = read.length >= readLimit;
-                }).catch((error) => {
-                    if (unread.length == 0) {
-                        this.domUtils.showErrorModalDefault(error, 'addon.notifications.errorgetnotifications', true);
-                        this.loadMoreError = true; // Set to prevent infinite calls with infinite-loading.
-                    }
-                }));
+            if (refresh) {
+                this.notifications = result.notifications;
             } else {
-                if (refresh) {
-                    this.notifications = unread;
-                } else {
-                    this.notifications = this.notifications.concat(unread);
-                }
-                this.canLoadMore = true;
+                this.notifications = this.notifications.concat(result.notifications);
             }
+            this.canLoadMore = result.canLoadMore;
 
-            return Promise.all(promises).then(() => {
-                // Mark retrieved notifications as read if they are not.
-                this.markNotificationsAsRead(unread);
-            });
+            this.markNotificationsAsRead(result.notifications);
         }).catch((error) => {
             this.domUtils.showErrorModalDefault(error, 'addon.notifications.errorgetnotifications', true);
             this.loadMoreError = true; // Set to prevent infinite calls with infinite-loading.
+        }).finally(() => {
+            this.notificationsLoaded = true;
         });
     }
 
@@ -146,9 +121,7 @@ export class AddonNotificationsListPage {
             // All marked as read, refresh the list.
             this.notificationsLoaded = false;
 
-            return this.refreshNotifications().finally(() => {
-                this.notificationsLoaded = true;
-            });
+            return this.refreshNotifications();
         });
     }
 
@@ -162,6 +135,11 @@ export class AddonNotificationsListPage {
 
         if (notifications.length > 0) {
             const promises = notifications.map((notification) => {
+                if (notification.read) {
+                    // Already read, don't mark it.
+                    return Promise.resolve();
+                }
+
                 return this.notificationsProvider.markNotificationRead(notification.id);
             });
 
@@ -227,6 +205,27 @@ export class AddonNotificationsListPage {
     protected formatText(notification: any): void {
         const text = notification.mobiletext.replace(/-{4,}/ig, '');
         notification.mobiletext = this.textUtils.replaceNewLines(text, '<br>');
+    }
+
+    /**
+     * User entered the page.
+     */
+    ionViewDidEnter(): void {
+        this.isCurrentView = true;
+
+        if (this.pendingRefresh) {
+            this.pendingRefresh = false;
+            this.notificationsLoaded = false;
+
+            this.refreshNotifications();
+        }
+    }
+
+    /**
+     * User left the page.
+     */
+    ionViewDidLeave(): void {
+        this.isCurrentView = false;
     }
 
     /**
