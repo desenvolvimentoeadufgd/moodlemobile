@@ -20,8 +20,7 @@
 
         <p padding>Escolha o servidor ao qual deseja se conectar:</p>
 
-        <a ion-button block (click)="connect($event, 'libras.ead.ufgd.edu.br')" [title]="LibEAD" margin-bottom>Libras EAD</a>
-        <a ion-button block (click)="connect($event, 'uab.ead.ufgd.edu.br')" [title]="UabEAD" margin-bottom>UAB EAD</a>
+        <a ion-button block (click)="connect($event, 'moodle.ead.ufgd.edu.br')" [title]="MoodleEAD" margin-bottom>Moodle EAD</a>
 
         <!-- CÓDIGO PADRÃO COMENTADO PARA PERSONALIZAÇÃO EAD UFGD -->
         <form ion-list [formGroup]="siteForm" (ngSubmit)="connect($event, siteForm.value.siteUrl)" *ngIf="!fixedSites || fixedDisplay == 'select'">
